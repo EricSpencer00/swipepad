@@ -64,6 +64,7 @@ final class GuidePanel: NSPanel {
   var active = false
   var target: AXUIElement?
   var originalPID: pid_t = 0
+  var originalSelection: CFRange?
   var finger: Int32?
   var path: [Point] = []
   var pending = false
@@ -234,6 +235,14 @@ final class GuidePanel: NSPanel {
       role: metadata.role, subrole: metadata.subrole, selectedTextSettable: metadata.writable,
       secureInput: IsSecureEventInputEnabled())
   }
+  func selection(_ element: AXUIElement) -> CFRange? {
+    guard let value = attribute(element, kAXSelectedTextRangeAttribute),
+      CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    var range = CFRange()
+    guard AXValueGetValue(unsafeDowncast(value, to: AXValue.self), .cfRange, &range),
+      range.location >= 0, range.length >= 0 else { return nil }
+    return range
+  }
   func validTarget() -> Bool {
     guard !IsSecureEventInputEnabled(), let target,
       let app = NSWorkspace.shared.frontmostApplication,
@@ -246,6 +255,9 @@ final class GuidePanel: NSPanel {
       originalPID: originalPID, currentPID: app.processIdentifier,
       sameElement: CFEqual(target, current), secure: IsSecureEventInputEnabled(),
       editable: supportedField(current))
+      && originalSelection.map { original in
+        selection(current).map { $0.location == original.location && $0.length == original.length } ?? false
+      } == true
     if active { lastFocusPreserved = permitted }
     return permitted
   }
@@ -271,6 +283,11 @@ final class GuidePanel: NSPanel {
       status?.menu?.items.first?.title = "Swipepad: focus a supported text area"
       return
     }
+    guard let range = selection(field) else {
+      cancel("Field does not expose a safe insertion range")
+      return
+    }
+    originalSelection = range
     originalPID = app.processIdentifier
     target = field
     active = true
@@ -384,6 +401,7 @@ final class GuidePanel: NSPanel {
     if let listener { OpenMTManager.shared().remove(listener) }
     listener = nil
     target = nil
+    originalSelection = nil
     path = []
     finger = nil
     keyboard.path = []
