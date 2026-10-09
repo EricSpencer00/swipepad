@@ -396,6 +396,7 @@ final class GuidePanel: NSPanel {
         nativeEnd=strokeSamples.last?.sourcePoint
       }
       if let end {appendSample(end,time:event.timestamp,phase:.ended,sourcePoint:nativeEnd)}
+      renderStroke() // Completed trail must include the exact endpoint used by the decoder.
       finger=nil
       guard active else {return}
       if strokeSamples.contains(where:{!(0...1).contains($0.point.x) || !(0...1).contains($0.point.y)}) {

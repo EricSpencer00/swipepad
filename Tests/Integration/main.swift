@@ -12,6 +12,7 @@ let app = NSApplication.shared
 app.delegate = delegate
 guard CommandLine.arguments.count == 2 else { print("Use scripts/test-integration.sh to create a fresh owned document."); exit(2) }
 let document = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
+UserDefaults.standard.set(InputMode.trackpad.rawValue,forKey:"inputMode") // Only this separate harness's domain.
 var trial = 0
 var expected = ""
 @MainActor func stop(_ message: String, success: Bool = false) {
@@ -28,6 +29,7 @@ var expected = ""
 }
 @MainActor func frame(_ point: Point?) {
   let event = OpenMTEvent()
+  event.setValue(ProcessInfo.processInfo.systemUptime,forKey:"timestamp")
   if let point {
     let touch = OpenMTTouch()
     touch.setValue(1,forKey:"identifier"); touch.setValue(OpenMTState.touching.rawValue,forKey:"state")
@@ -97,7 +99,7 @@ var expected = ""
     delegate.cancel("Range fixture complete")
   }
   print("PASS: fresh activation and retry retain the intended new selection range.")
-  nativePolicyChecks()
+  overlayLayoutChecks()
 }
 @MainActor func nativePolicyChecks() {
   let window = NSWindow(contentRect:NSRect(x:0,y:0,width:420,height:240),styleMask:[.titled,.closable],backing:.buffered,defer:false)
@@ -110,6 +112,10 @@ var expected = ""
   let controls:[(String,NSView)] = [("secure",secure),("read-only",readonly),("unsupported",unsupported)]
   var index = 0
   let timer = Timer(timeInterval:0.15,repeats:true) { _ in MainActor.assumeIsolated {
+    if index == 0 {
+      guard !delegate.active,!delegate.panel.isVisible,delegate.overlayPanel?.isVisible != true,delegate.originalSelection==nil else {stop("FAIL: owned app switch did not cancel/hide/clear active overlay.");return}
+      print("PASS: actual switch from owned TextEdit to owned native fixture window cancels active overlay.")
+    }
     if index == controls.count {window.close();stop("PASS: native secure/read-only/unsupported metadata rejection plus synthetic range/insertion regression checks. Hardware not certified.",success:true);return}
     let (name,control) = controls[index];window.makeFirstResponder(control)
     guard let field = delegate.focused(ProcessInfo.processInfo.processIdentifier) else {stop("BLOCKED: native owned fixture focus unavailable.");return}

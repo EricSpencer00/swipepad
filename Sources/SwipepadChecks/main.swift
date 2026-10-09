@@ -259,6 +259,13 @@ for sampleCount in [10,20,40] {
   check(StrokeDecoder.rank(sampled(points),words:fixtureWords).first?.word=="there","arc-length density invariant revisit \(sampleCount)")
 }
 let endpoints=StrokeDecoder.resample(original)
+let savedLayout=[0.15,0.30,0.70,0.266]
+for visible in [CalibrationRect(x:0,y:0,width:1200,height:800),CalibrationRect(x:-800,y:100,width:800,height:1200),CalibrationRect(x:0,y:0,width:1900,height:600)] {
+  let restored=CalibrationRect.restoreOverlay(savedLayout,in:visible)!
+  check(abs(restored.height/restored.width-0.38)<0.000001,"saved overlay aspect survives nonuniform display change")
+  check(restored.x>=visible.x && restored.y>=visible.y && restored.x+restored.width<=visible.x+visible.width+0.000001 && restored.y+restored.height<=visible.y+visible.height+0.000001,"restored overlay fits changed display bounds")
+}
+check(CalibrationRect.restoreOverlay([0,0,2,1],in:rect)==nil,"invalid saved overlay rejected")
 check(endpoints.first==original.first && endpoints.last==original.last,"explicit endpoints preserved")
 check(StrokeDecoder.rank(sampled(original,step:0.02),words:fixtureWords).first?.word==StrokeDecoder.rank(sampled(original,step:0.005),words:fixtureWords).first?.word,"speed invariant shape matching")
 let noisy=original.enumerated().map {Point($0.element.x+0.004*sin(Double($0.offset)), $0.element.y+0.004*cos(Double($0.offset)))}

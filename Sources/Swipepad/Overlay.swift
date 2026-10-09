@@ -21,11 +21,11 @@ import SwipepadCore
       let size=text.size(withAttributes:attributes)
       text.draw(at:NSPoint(x:rect.midX-size.width/2,y:rect.midY-size.height/2),withAttributes:attributes)
     }
-    for (index,pair) in zip(path,path.dropFirst()).enumerated() {
-      let line=NSBezierPath();line.move(to:NSPoint(x:pair.0.x*bounds.width,y:pair.0.y*bounds.height));line.line(to:NSPoint(x:pair.1.x*bounds.width,y:pair.1.y*bounds.height))
+    if let first=path.first,path.count>1 {
+      let line=NSBezierPath();line.move(to:NSPoint(x:first.x*bounds.width,y:first.y*bounds.height))
+      for point in path.dropFirst() {line.line(to:NSPoint(x:point.x*bounds.width,y:point.y*bounds.height))}
       line.lineWidth=solid ? 5 : 4;line.lineCapStyle = .round;line.lineJoinStyle = .round
-      let alpha:CGFloat=workspace.accessibilityDisplayShouldReduceMotion || solid ? 0.8 : 0.25+0.5*CGFloat(index+1)/CGFloat(max(1,path.count-1))
-      NSColor.systemBlue.withAlphaComponent(alpha).setStroke();line.stroke()
+      NSColor.systemBlue.withAlphaComponent(solid ? 0.9 : 0.65).setStroke();line.stroke()
     }
     if let start=path.first {
       NSColor.systemBlue.withAlphaComponent(0.8).setFill()
@@ -64,11 +64,9 @@ import SwipepadCore
   }
   func overlayRect(_ screen:NSScreen) -> NSRect {
     let visible=screen.visibleFrame
-    guard let stored=UserDefaults.standard.array(forKey:displayKey(screen)) as? [Double],stored.count==4,
-      stored.allSatisfy(\.isFinite),stored[2]>0,stored[3]>0 else {return defaultOverlayRect(screen)}
-    let rect=NSRect(x:visible.minX+stored[0]*visible.width,y:visible.minY+stored[1]*visible.height,width:stored[2]*visible.width,height:stored[3]*visible.height)
-    guard visible.contains(rect),rect.width>=240,rect.height>=90 else {return defaultOverlayRect(screen)}
-    return rect
+    guard let stored=UserDefaults.standard.array(forKey:displayKey(screen)) as? [Double],
+      let rect=CalibrationRect.restoreOverlay(stored,in:CalibrationRect(x:visible.minX,y:visible.minY,width:visible.width,height:visible.height)) else {return defaultOverlayRect(screen)}
+    return NSRect(x:rect.x,y:rect.y,width:rect.width,height:rect.height)
   }
   func configureOverlay() {
     guard let screen=selectedScreen() else {cancel("No display available");return}

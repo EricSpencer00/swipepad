@@ -24,6 +24,20 @@ public struct CalibrationRect: Equatable, Sendable {
     return Point((point.x-x)/width,(point.y-y)/height)
   }
   public func screenPoint(_ point: Point) -> Point { Point(x+point.x*width,y+point.y*height) }
+  /// Saved normalized layout uses width and center; height always follows the keyboard aspect.
+  /// Bounds fitting applies to layout only, never to captured stroke points.
+  public static func restoreOverlay(_ stored:[Double], in visible:CalibrationRect, aspect:Double=0.38) -> CalibrationRect? {
+    guard visible.isValid,aspect.isFinite,aspect>0,stored.count==4,
+      stored.allSatisfy(\.isFinite),stored[0]>=0,stored[1]>=0,stored[2]>0,stored[3]>0,
+      stored[0]+stored[2]<=1.000001,stored[1]+stored[3]<=1.000001 else {return nil}
+    let width=min(stored[2]*visible.width,visible.width,visible.height/aspect)
+    let height=width*aspect
+    guard width>=240,height>=90 else {return nil}
+    let center=visible.screenPoint(Point(stored[0]+stored[2]/2,stored[1]+stored[3]/2))
+    let x=min(max(visible.x,center.x-width/2),visible.x+visible.width-width)
+    let y=min(max(visible.y,center.y-height/2),visible.y+visible.height-height)
+    return CalibrationRect(x:x,y:y,width:width,height:height)
+  }
 }
 public struct GestureCandidate: Sendable {
   public let word: String

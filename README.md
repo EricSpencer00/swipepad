@@ -12,7 +12,7 @@ This is an early prototype with a small English demonstration vocabulary, not a 
 
 Choose **Overlay Layout…** from the menu or Setup to move and resize a normal preview window with capture off. Its keyboard canvas keeps its aspect ratio. **Use This Layout** saves the canvas's screen position and size for that display, and the opacity slider adjusts key translucency. **Reset Layout** restores that display's default geometry. Return to the intended text field before activating. Calibration is frozen for each stroke; changing displays cancels active capture. Screen Overlay's keyboard remains visible while active, independent of the physical guide setting.
 
-Screen Overlay is implemented and covered by synthetic geometry checks, but physical cursor/contact timing, tap-to-click behavior, multiple displays, and candidate interactions in this mode still need hands-on validation.
+Screen Overlay's native candidate clicks, focus preservation, click absorption, layout saving, retry and Escape cancellation have been checked in a separate harness with generated cursor/contact traces and a fresh owned TextEdit document. Physical cursor/contact timing, real tap-to-click behavior, multiple displays and swipe accuracy still need hands-on validation. Touch frames are processed on the main queue and sample the then-current cursor; rapid movement during a backlog can lose detail or misalign cursor positions with the original touch timestamps. The complete sampled trail is preserved, but it is not a guarantee that every physical motion was captured.
 
 ## Build and run
 
@@ -24,7 +24,7 @@ swift run SwipepadChecks
 open dist/Swipepad.app
 ```
 
-The complete local app bundle is ad hoc signed, and is not Developer ID signed or notarized. macOS may block opening it. Review the source and follow macOS's normal explicit approval flow if you choose to run your own build; do not disable Gatekeeper. No installer, App Store distribution, or hosted CI is provided. Keep the app at a stable location before choosing to grant access, and restart after permissions change.
+By default, the build script uses ad hoc signing. You may explicitly select an existing signing identity; neither path performs notarization. macOS may block opening the app. Review the source and follow macOS's normal explicit approval flow if you choose to run your own build; do not disable Gatekeeper. No installer, App Store distribution, or hosted CI is provided. Keep the app at a stable location before choosing to grant access, and restart after permissions change.
 
 ## Setup, permissions and doctor
 
@@ -69,7 +69,7 @@ The guide is a non-key, nonactivating floating window: the original text field s
 
 Menu settings persist: hide the keyboard drawing (candidate controls and mode status remain visible), and configure double-Command tap interval and debounce. Command shortcuts cancel the pending tap sequence; ordinary shortcuts are never intercepted. Outside active mode no touch listener is registered. Escape is observed rather than swallowed and may also reach the foreground app.
 
-Candidates are ranked by a small DTW path matcher. Click one to commit, or click **Swipe again** to discard the gesture and correct it. No automatic commit occurs on lift. Unsupported words will produce approximate candidates; cancel rather than accept an incorrect word. There is no language model, punctuation gesture, personalized dictionary, or post-insertion undo engine; use the receiving app's usual editing tools.
+Trackpad candidates use the existing small DTW matcher. Screen Overlay ranks complete paths by location, normalized shape and soft endpoint penalties; localized loops provide a small repeated-letter cue while a pause alone does not disambiguate repeated letters. Its low-score-confidence cutoff returns **No match** for sufficiently distant paths. Click a candidate to commit, or **Swipe Again** to discard and correct the gesture. No automatic commit occurs on lift. Unsupported words can produce approximate candidates; cancel rather than accept an incorrect word. There is no language model, punctuation gesture, personalized dictionary, or post-insertion undo engine; use the receiving app's usual editing tools.
 
 ## Hands-on validation still required
 
