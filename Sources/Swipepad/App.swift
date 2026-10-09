@@ -39,12 +39,21 @@ final class GuidePanel: NSPanel {
     }
   }
 }
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
   var status: NSStatusItem!
   var panel: GuidePanel!
   lazy var keyboard = KeyboardView(frame: NSRect(x: 20, y: 100, width: 560, height: 210))
   lazy var label = NSTextField(labelWithString: "OFF — Double-tap Command in a text field")
   var buttons: [NSButton] = []
+  var guideKeyboardHeight:NSLayoutConstraint?
+  var overlayPanel:GuidePanel?
+  let overlayKeyboard=OverlayKeyboardView()
+  var overlayFrame:CalibrationRect?
+  var strokeCalibration:CalibrationRect?
+  var strokeSamples:[StrokeSample]=[]
+  var strokeSource:InputMode = .trackpad
+  var layoutPanel:NSWindow?
+  var layoutPreview:LayoutPreviewView?
   var hotkey = CommandTap()
   var monitors: [Any] = []
   var globalMonitor: Any?
@@ -73,9 +82,12 @@ final class GuidePanel: NSPanel {
   let words =
     "a about after again all also am an and any app are as at back be because been before build but by can cat code come day did do does dog done down each email end even for from get give go good got great had has have he hello help her here him his home how i if in into is it its just know last let like little look love made make many may me more most much my need new next no not now of off on one only or other our out over people please right said same see she should so some start still stop such take test than thank that the their them then there these they thing think this time to today too tonight two type typing up us use very want was way we well were what when where which who will with word work world would write yes you your"
     .components(separatedBy: " ")
+  func validateMenuItem(_ menuItem:NSMenuItem) -> Bool {
+    menuItem.action == #selector(chooseMode(_:)) ? !active : true
+  }
   func applicationDidFinishLaunching(_ notification: Notification) {
     UserDefaults.standard.register(defaults: [
-      "showGuide": true, "interval": 0.35, "debounce": 0.15,
+      "showGuide": true, "interval": 0.35, "debounce": 0.15, "inputMode": "trackpad", "overlayOpacity": 0.55,
     ])
     hotkey.interval = UserDefaults.standard.double(forKey: "interval")
     hotkey.debounce = UserDefaults.standard.double(forKey: "debounce")
@@ -90,6 +102,13 @@ final class GuidePanel: NSPanel {
     menu.addItem(
       withTitle: "Show Keyboard Guide", action: #selector(toggleGuide), keyEquivalent: ""
     ).state = UserDefaults.standard.bool(forKey: "showGuide") ? .on : .off
+    menu.addItem(.separator())
+    for (title,mode) in [("Trackpad Mode",InputMode.trackpad),("Screen Overlay Mode",.screenOverlay)] {
+      let item=menu.addItem(withTitle:title,action:#selector(chooseMode(_:)),keyEquivalent:"")
+      item.representedObject=mode.rawValue;item.state=inputMode==mode ? .on : .off
+    }
+    menu.addItem(withTitle:"Overlay Layout…",action:#selector(showOverlayLayout),keyEquivalent:"")
+    menu.addItem(.separator())
     menu.addItem(withTitle: "Setup…", action: #selector(showSetup), keyEquivalent: "")
     menu.addItem(withTitle: "Quit Swipepad", action: #selector(quit), keyEquivalent: "q")
     for item in menu.items { item.target = self }
@@ -118,7 +137,8 @@ final class GuidePanel: NSPanel {
     keyboard.setAccessibilityLabel("Trackpad keyboard guide")
     guide.addArrangedSubview(keyboard)
     keyboard.widthAnchor.constraint(equalTo: guide.widthAnchor).isActive = true
-    keyboard.heightAnchor.constraint(equalToConstant: 210).isActive = true
+    guideKeyboardHeight=keyboard.heightAnchor.constraint(equalToConstant:210)
+    guideKeyboardHeight?.isActive=true
     let candidates = NSStackView(); candidates.spacing = 8
     for i in 0..<5 {
       let button = NSButton(title: "", target: self, action: #selector(selectCandidate(_:)))
@@ -169,6 +189,7 @@ final class GuidePanel: NSPanel {
         if self.setupPanel?.isVisible == true { self.refreshDoctor() }
       }
     }
+    NotificationCenter.default.addObserver(self,selector:#selector(displaysChanged),name:NSApplication.didChangeScreenParametersNotification,object:nil)
     let firstLaunch = !UserDefaults.standard.bool(forKey: "hasLaunched")
     UserDefaults.standard.set(true, forKey: "hasLaunched")
     if (firstLaunch && !AXIsProcessTrusted()) || CommandLine.arguments.contains("--setup") { showSetup() }
@@ -294,6 +315,7 @@ final class GuidePanel: NSPanel {
     pending = false
     waitForLift = true
     path = []
+    strokeSamples=[];strokeSource=inputMode;strokeCalibration=nil
     finger = nil
     guard OpenMTManager.systemSupportsMultitouch() else {
       cancel("No supported trackpad")
@@ -312,6 +334,14 @@ final class GuidePanel: NSPanel {
     keyboard.path = []
     keyboard.needsDisplay = true
     buttons.forEach { $0.isHidden = true }
+    if strokeSource == .screenOverlay {
+      configureOverlay()
+    } else {
+      guideKeyboardHeight?.constant=210
+      panel.setContentSize(NSSize(width:600,height:360))
+      panel.center()
+    }
+    guard active else {return}
     panel.orderFrontRegardless()
   }
   @objc func touchFrame(_ event: OpenMTEvent) {
@@ -329,46 +359,88 @@ final class GuidePanel: NSPanel {
       return
     }
     if touches.count > 1 {
-      waitForLift = true
-      path = []
-      finger = nil
-      label.stringValue = "Use one finger; lift all fingers and try again"
+      resetStrokeForRetry("Use one finger · lift all fingers to retry")
       return
     }
     if let touch = touches.first {
       if finger == nil {
-        finger = touch.identifier
-        path = []
+        finger=touch.identifier;path=[];strokeSamples=[]
+        strokeCalibration=overlayFrame // frozen for this contact; preview cannot resize it.
+        if strokeSource == .screenOverlay {
+          let cursor=NSEvent.mouseLocation
+          guard let initial=strokeCalibration?.normalize(Point(cursor.x,cursor.y)), (0...1).contains(initial.x), (0...1).contains(initial.y) else {
+            finger=nil;waitForLift=true
+            label.stringValue="Place cursor on first key · lift, then swipe"
+            return
+          }
+        }
       }
-      guard finger == touch.identifier else {
-        path = []
-        finger = nil
+      guard finger==touch.identifier else {
+        resetStrokeForRetry("Contact changed · lift all fingers to retry")
         return
       }
-      let p = Point(Double(touch.posX), Double(touch.posY))
-      if path.last.map({ $0.distance(p) > 0.005 }) ?? true {
-        if path.count < 512 { path.append(p) }
-      }
-      label.stringValue = "Swiping · lift to see words"
-      keyboard.path = path
-      keyboard.needsDisplay = true
+      guard let sample=samplePoint(touch) else {cancel("Calibration unavailable");return}
+      appendSample(sample.normalized,time:event.timestamp,phase:strokeSamples.isEmpty ? .began : .moved,sourcePoint:sample.native)
+      label.stringValue="Swiping · lift to see words"
+      renderStroke()
     } else if finger != nil {
-      liftSeen = true
-      finger = nil
-      guard path.count >= 3, let first = path.first,
-        path.contains(where: { first.distance($0) > 0.06 })
-      else {
-        path = []
+      liftSeen=true
+      let end:Point?
+      let nativeEnd:Point?
+      if strokeSource == .screenOverlay {
+        let cursor=NSEvent.mouseLocation
+        nativeEnd=Point(cursor.x,cursor.y)
+        end=strokeCalibration?.normalize(nativeEnd!)
+      } else {
+        end=path.last
+        nativeEnd=strokeSamples.last?.sourcePoint
+      }
+      if let end {appendSample(end,time:event.timestamp,phase:.ended,sourcePoint:nativeEnd)}
+      finger=nil
+      guard active else {return}
+      if strokeSamples.contains(where:{!(0...1).contains($0.point.x) || !(0...1).contains($0.point.y)}) {
+        pending=true;buttons.forEach{$0.isHidden=true}
+        label.stringValue="Outside keyboard · choose Swipe Again to retry"
         return
       }
-      let candidates = Decoder.candidates(path, words: words)
-      pending = !candidates.isEmpty
-      for (i, b) in buttons.enumerated() {
-        b.isHidden = i >= candidates.count
-        if i < candidates.count { b.title = candidates[i]; b.setAccessibilityLabel("Insert " + candidates[i]); b.setAccessibilityHelp("Candidate \(i + 1) of \(candidates.count)") }
+      guard path.count>=3,let first=path.first,path.contains(where:{first.distance($0)>0.06}) else {
+        resetStrokeForRetry("Stroke too short · lift, then swipe a word")
+        return
       }
-      label.stringValue = candidates.isEmpty ? "No match · choose Swipe Again to retry" : "Choose a word · click to insert in your text field"
+      let candidates=strokeSource == .screenOverlay ? StrokeDecoder.candidates(strokeSamples,words:words) : Decoder.candidates(path,words:words)
+      pending=true // no-match also freezes input until an explicit retry.
+      for (index,button) in buttons.enumerated() {
+        button.isHidden=index>=candidates.count
+        if index<candidates.count {
+          button.title=candidates[index]
+          button.setAccessibilityLabel("Insert "+candidates[index])
+          button.setAccessibilityHelp("Candidate \(index+1) of \(candidates.count)")
+        }
+      }
+      label.stringValue=candidates.isEmpty ? "No match · choose Swipe Again to retry" : "Choose a word · click to insert in your text field"
     }
+  }
+  func samplePoint(_ touch:OpenMTTouch) -> (normalized:Point,native:Point)? {
+    if strokeSource == .trackpad {
+      let point=Point(Double(touch.posX),Double(touch.posY));return (point,point)
+    }
+    let cursor=NSEvent.mouseLocation, native=Point(cursor.x,cursor.y)
+    guard let normalized=strokeCalibration?.normalize(native) else {return nil}
+    return (normalized,native)
+  }
+  func appendSample(_ point:Point,time:Double,phase:ContactPhase,sourcePoint:Point? = nil) {
+    guard strokeSamples.count<4096 else {cancel("Stroke too long; cancelled");return}
+    strokeSamples.append(StrokeSample(point,time:time,phase:phase,source:strokeSource,sourcePoint:sourcePoint))
+    // Original trackpad matcher retains its spacing; overlay geometry keeps every frame.
+    if strokeSource == .screenOverlay || phase == .ended || path.last.map({$0.distance(point)>0.005}) ?? true {path.append(point)}
+  }
+  func renderStroke() {
+    keyboard.path=path;keyboard.needsDisplay=true
+    overlayKeyboard.path=strokeSamples.map(\.point);overlayKeyboard.needsDisplay=true
+  }
+  func resetStrokeForRetry(_ message:String) {
+    waitForLift=true;path=[];strokeSamples=[];finger=nil;strokeCalibration=nil
+    renderStroke();label.stringValue=message
   }
   @objc func selectCandidate(_ sender: NSButton) {
     guard active, pending, !sender.isHidden, validTarget(), let target else {
@@ -390,10 +462,11 @@ final class GuidePanel: NSPanel {
     waitForLift = true
     path = []
     finger = nil
+    strokeSamples=[];strokeCalibration=nil;overlayKeyboard.path=[];overlayKeyboard.needsDisplay=true
     keyboard.path = []
     keyboard.needsDisplay = true
     buttons.forEach { $0.isHidden = true }
-    label.stringValue = "ON · Slide one finger; lift, then choose a word"
+    label.stringValue = "Lift all fingers · then swipe one word"
   }
   func cancel(_ reason: String) {
     active = false
@@ -410,6 +483,8 @@ final class GuidePanel: NSPanel {
       $0.isHidden = true
     }
     panel?.orderOut(nil)
+    overlayPanel?.orderOut(nil);overlayKeyboard.path=[];overlayKeyboard.needsDisplay=true
+    strokeSamples=[];strokeCalibration=nil;overlayFrame=nil
     updateModeIndicator()
     status?.button?.toolTip = reason
     status?.menu?.items.first?.title = "Swipepad: " + reason

@@ -62,7 +62,7 @@ import TrackpadBridge
     var report = Doctor.evaluate(input)
     let executable = Bundle.main.executableURL
     let hash = executable.flatMap { try? Data(contentsOf: $0) }.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "unavailable"
-    report.runtimeIdentity = "Responder PID: \(ProcessInfo.processInfo.processIdentifier) · bundle: \(Bundle.main.bundleIdentifier ?? "unbundled")\nExecutable: \(executable?.path ?? "unavailable")\nSHA-256: \(hash)"
+    report.runtimeIdentity = "Input mode: \(inputMode.rawValue)\nResponder PID: \(ProcessInfo.processInfo.processIdentifier) · bundle: \(Bundle.main.bundleIdentifier ?? "unbundled")\nExecutable: \(executable?.path ?? "unavailable")\nSHA-256: \(hash)"
     return report
   }
   @objc func showSetup() {
@@ -155,6 +155,9 @@ import TrackpadBridge
     guard let button = status?.button else { return }
     let state = active ? "On" : (!AXIsProcessTrusted() || globalMonitor == nil ? "Needs setup" : "Ready")
     button.title = ""
+    for item in status.menu?.items ?? [] where item.action == #selector(chooseMode(_:)) {
+      item.isEnabled = !active
+    }
     button.setAccessibilityLabel("Swipepad")
     button.setAccessibilityValue(state)
     button.toolTip = "Swipepad: " + state

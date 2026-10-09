@@ -10,7 +10,7 @@ swift build -c release
 fixture_bin=$(swift build -c release --show-bin-path)
 swiftc -swift-version 6 -default-isolation MainActor \
   -I "$fixture_bin/Modules" -I "$fixture_bin/TrackpadBridge.build" \
-  Sources/Swipepad/App.swift Sources/Swipepad/DoctorSupport.swift Sources/Swipepad/SetupView.swift \
+  Sources/Swipepad/App.swift Sources/Swipepad/DoctorSupport.swift Sources/Swipepad/SetupView.swift Sources/Swipepad/Overlay.swift \
   Tests/Integration/main.swift "$fixture_bin"/SwipepadCore.build/*.o "$fixture_bin"/TrackpadBridge.build/*.o \
   -F /System/Library/PrivateFrameworks -framework MultitouchSupport \
   -o "$fixture_dir/SwipepadIntegrationChecks"

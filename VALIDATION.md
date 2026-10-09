@@ -1,5 +1,9 @@
 # Prototype validation
 
+Screen Overlay source milestone: release compilation and 112 synthetic core checks pass. New checks cover distinct input sources, raw sample preservation, unclamped calibration with negative display origins, inverse geometry, endpoint preservation, density and timing changes, jitter, reversals, revisits, local repeated-letter loops, unrelated loops, dwell ambiguity, invalid/zero-length paths and proportional versus banded-DTW comparison. The 11-word release fixture benchmark measured approximately 0.066 ms per proportional rank and 0.342 ms per banded-DTW rank on the development machine; neither is a hardware accuracy or production latency claim. The existing physical decoder remains separate. Native Screen Overlay interaction and hardware acceptance remain unverified; earlier fixture passes apply to the preceding physical-mode source. The installed signed bundle is not replaced by these source checks.
+
+After adding Screen Overlay, the separate native integration harness again passed its physical-mode candidate, insertion-range, UTF-16 replacement and native field-policy checks. The staged app bundle built, its Info.plist passed lint and its ad hoc signature verified. Actual OverlayKeyboardView light/dark offscreen renders were generated with a synthetic hello path; the light render was visually inspected. Offscreen images do not prove desktop translucency or hardware interaction. The trusted installed production bundle remains unchanged.
+
 Verified locally on Apple Silicon using Swift 6.3.3 and the macOS 26 SDK:
 
 - Native debug executable compiled.

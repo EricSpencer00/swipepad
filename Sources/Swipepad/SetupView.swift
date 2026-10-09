@@ -83,6 +83,7 @@ final class SetupWindow: NSWindow {
     disclosure.target = self; disclosure.action = #selector(toggleDiagnostics)
     disclosure.setAccessibilityLabel("Diagnostics")
     disclosure.setAccessibilityValue("Collapsed")
+    stack.addArrangedSubview(NSButton(title:"Overlay Layout…",target:owner,action:#selector(AppDelegate.showOverlayLayout)))
     stack.addArrangedSubview(disclosure)
     diagnostics.orientation = .vertical; diagnostics.alignment = .leading; diagnostics.spacing = 8; diagnostics.isHidden = true
     stack.addArrangedSubview(diagnostics)

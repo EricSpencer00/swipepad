@@ -234,4 +234,80 @@ preflight.live = false
 check(
   Doctor.evaluate(preflight).state.hasPrefix("Preflight only"),
   "doctor absent live snapshot never presents GUI ready state")
+
+// Original full-path overlay matcher: synthetic regression evidence only.
+func sampled(_ points:[Point], step:Double=0.01) -> [StrokeSample] {
+  points.enumerated().map {StrokeSample($0.element,time:Double($0.offset)*step)}
+}
+let fixtureWords=["cat","cot","tap","pat","there","test","god","good","hello","world","typing"]
+for word in ["cat","cot","tap","pat","there","test","hello","world","typing"] {
+  check(StrokeDecoder.rank(sampled(Keyboard.path(word)),words:fixtureWords).first?.word==word,"overlay exact proportional path \(word)")
+}
+let rect=CalibrationRect(x:-1200,y:180,width:960,height:360)
+check(rect.normalize(rect.screenPoint(Point(0.2,0.8)))!.distance(Point(0.2,0.8))<0.000001,"negative-origin secondary-display point transform")
+check(rect.normalize(Point(-1300,180))!.x<0,"unclamped outside geometry")
+check(CalibrationRect(x:0,y:0,width:0,height:1).normalize(Point(0,0))==nil,"zero calibration rejected")
+check(CalibrationRect(x:0,y:.nan,width:1,height:1).normalize(Point(0,0))==nil,"nonfinite calibration rejected")
+let original=Keyboard.path("cat")
+for scale in [0.5,1.0,2.0] {
+  let scaled=CalibrationRect(x:-300,y:50,width:800*scale,height:300*scale)
+  let normalized=original.map {scaled.normalize(scaled.screenPoint($0))!}
+  check(StrokeDecoder.rank(sampled(normalized),words:fixtureWords).first?.word=="cat","screen-point scale and Retina-independent ranking \(scale)")
+}
+for sampleCount in [10,20,40] {
+  let points=StrokeDecoder.resample(Keyboard.path("there"),count:sampleCount)
+  check(StrokeDecoder.rank(sampled(points),words:fixtureWords).first?.word=="there","arc-length density invariant revisit \(sampleCount)")
+}
+let endpoints=StrokeDecoder.resample(original)
+check(endpoints.first==original.first && endpoints.last==original.last,"explicit endpoints preserved")
+check(StrokeDecoder.rank(sampled(original,step:0.02),words:fixtureWords).first?.word==StrokeDecoder.rank(sampled(original,step:0.005),words:fixtureWords).first?.word,"speed invariant shape matching")
+let noisy=original.enumerated().map {Point($0.element.x+0.004*sin(Double($0.offset)), $0.element.y+0.004*cos(Double($0.offset)))}
+check(StrokeDecoder.rank(sampled(noisy),words:fixtureWords).first?.word=="cat","deterministic jitter retains mid-path cat")
+var shifted=original; shifted[0].x += 0.025;shifted[shifted.count-1].y += 0.025
+check(StrokeDecoder.rank(sampled(shifted),words:fixtureWords).first?.word=="cat","broad endpoints accept quarter-key-width shifts")
+let ambiguous=StrokeDecoder.rank(sampled(Keyboard.path("god")),words:["god","good"])
+check(ambiguous.count==2 && abs(ambiguous[0].score-ambiguous[1].score)<0.000001,"god/good ordinary path has equal geometry")
+var dwell=sampled(Keyboard.path("god"))
+if let index=dwell.firstIndex(where: {$0.point.distance(Keyboard.keys["o"]!)<0.005}) {
+  let point=dwell[index].point,time=dwell[index].time
+  dwell.insert(StrokeSample(point,time:time),at:index)
+  dwell=dwell.enumerated().map {StrokeSample($0.element.point,time:Double($0.offset)*0.01+($0.offset>index ? 0.2 : 0))}
+}
+let paused=StrokeDecoder.rank(dwell,words:["god","good"])
+check(paused.count==2 && abs(paused[0].score-paused[1].score)<0.000001,"pause alone does not force repeated O")
+var looped=Keyboard.path("god")
+if let index=looped.firstIndex(where:{$0.distance(Keyboard.keys["o"]!)<0.005}) {
+  let center=Keyboard.keys["o"]!
+  let loop=(0...16).map { i in Point(center.x+0.03*cos(Double(i)*2*Double.pi/16),center.y+0.03*sin(Double(i)*2*Double.pi/16)) }
+  looped.insert(contentsOf:loop,at:index)
+}
+let loopRanking=StrokeDecoder.rank(sampled(looped),words:["god","good"])
+check(loopRanking.first?.word=="good","localized loop softly supports repeated letter")
+check(loopRanking.count==2,"loop retains ambiguous alternate")
+check(StrokeDecoder.rank([],words:fixtureWords).isEmpty,"overlay empty path rejected")
+check(StrokeDecoder.rank(sampled([Point(0.1,0.1),Point(.nan,0.2),Point(0.3,0.3)]),words:fixtureWords).isEmpty,"overlay NaN rejected")
+check(StrokeDecoder.rank(sampled([Point(-0.1,0.1),Point(0.2,0.2),Point(0.3,0.3)]),words:fixtureWords).isEmpty,"overlay outside point rejected without clamp")
+check(StrokeDecoder.rank(sampled(Array(repeating:Point(0.3,0.3),count:10)),words:fixtureWords).isEmpty,"zero-length overlay rejected")
+var reversedTime=sampled(original);reversedTime[2]=StrokeSample(original[2],time:-1)
+check(StrokeDecoder.rank(reversedTime,words:fixtureWords).isEmpty,"nonmonotonic raw times rejected")
+
+var mixed=sampled(original)
+mixed[1]=StrokeSample(mixed[1].point,time:mixed[1].time,source:.trackpad)
+check(StrokeDecoder.rank(mixed,words:fixtureWords).isEmpty,"mixed pointer/touch samples rejected")
+let native=StrokeSample(Point(0.5,0.5),time:4,phase:.ended,source:.screenOverlay,sourcePoint:Point(-900,430))
+check(native.sourcePoint==Point(-900,430) && native.time==4 && native.phase == .ended,"raw screen coordinates time and phase preserved")
+for word in ["cat","cot","tap","pat","there","test","hello","world","typing"] {
+  check(StrokeDecoder.rank(sampled(Keyboard.path(word)),words:fixtureWords,matching:.bandedDTW).first?.word==word,"banded DTW comparator exact fixture \(word)")
+}
+var unrelated=Keyboard.path("god")
+let center=Keyboard.keys["g"]!
+unrelated.insert(contentsOf:(0...16).map {i in Point(center.x+0.03*cos(Double(i)*2*Double.pi/16),center.y+0.03*sin(Double(i)*2*Double.pi/16))},at:1)
+let unrelatedRank=StrokeDecoder.rank(sampled(unrelated),words:["god","good"])
+check(abs(unrelatedRank[0].score-unrelatedRank[1].score)<0.000001,"unrelated loop cannot imply repeated O")
+let benchmarkPath=sampled(Keyboard.path("there"))
+for (label,matching) in [("proportional",PathMatching.proportional),("banded DTW",.bandedDTW)] {
+  let start=Date()
+  for _ in 0..<30 {_=StrokeDecoder.rank(benchmarkPath,words:fixtureWords,matching:matching)}
+  print("Synthetic 11-word decoder benchmark \(label): \(String(format:"%.3f",Date().timeIntervalSince(start)*1000/30)) ms per rank; not hardware accuracy or production latency.")
+}
 print("Passed \(count) synthetic core checks. No physical touches or text insertion tested.")

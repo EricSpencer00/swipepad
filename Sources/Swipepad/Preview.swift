@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwipepadCore
 
 @MainActor func renderPreviews(to directory: String, owner: AppDelegate) throws {
   let app = NSApplication.shared
@@ -7,6 +8,17 @@ import Foundation
   let folder = URL(fileURLWithPath: directory, isDirectory: true)
   try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
   for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+    let overlay=OverlayKeyboardView(frame:NSRect(x:0,y:0,width:960,height:365))
+    overlay.path=Keyboard.path("hello");overlay.appearance=NSAppearance(named:appearance)
+    let overlayWindow=NSWindow(contentRect:overlay.frame,styleMask:[],backing:.buffered,defer:false)
+    overlayWindow.contentView=overlay;overlayWindow.displayIfNeeded();overlay.display()
+    if let bitmap=overlay.bitmapImageRepForCachingDisplay(in:overlay.bounds) {
+      overlay.cacheDisplay(in:overlay.bounds,to:bitmap)
+      if let data=bitmap.representation(using:.png,properties:[:]) {
+        try data.write(to:folder.appendingPathComponent("overlay-\(name).png"))
+      }
+    }
+    overlayWindow.orderOut(nil)
     for trusted in [false, true] {
       let view = SetupView(owner: owner)
       view.previewTrusted = trusted
@@ -28,5 +40,5 @@ import Foundation
       window.orderOut(nil)
     }
   }
-  try "Offscreen actual SetupView renders. Permission states are illustrative overrides. No window shown, permission requested, physical touch tested, or text inserted.\n".write(to: folder.appendingPathComponent("EVIDENCE.txt"), atomically: true, encoding: .utf8)
+  try "Offscreen actual SetupView and OverlayKeyboardView renders. Permission states and hello stroke are illustrative fixtures. No window shown, permission requested, physical touch tested, or text inserted.\n".write(to: folder.appendingPathComponent("EVIDENCE.txt"), atomically: true, encoding: .utf8)
 }

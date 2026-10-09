@@ -2,7 +2,17 @@
 
 An experimental native macOS menu-bar app for swiping words on a MacBook's **physical trackpad**. Double-tap Command while an editable text field is focused, lift any resting fingers, then slide one finger across the QWERTY layout shown in the guide, lift, and click the intended candidate to insert it followed by a space. Escape cancels. Each insertion ends the session.
 
-This is an early prototype with a small English demonstration vocabulary, not a polished keyboard replacement. There are no accuracy claims. Physical swipe capture and real-app insertion still require hands-on validation; automated checks cover synthetic geometry, decoding, hotkey transitions, field/focus policy, and mocked doctor states. No cursor-pointer tracing fallback exists.
+This is an early prototype with a small English demonstration vocabulary, not a polished keyboard replacement. There are no accuracy claims. Physical swipe capture still requires hands-on validation. Separate native fixtures verify candidate controls and insertion into owned TextEdit documents using synthetic geometry; they do not establish hardware accuracy. The selectable Screen Overlay mode explicitly uses cursor coordinates; Trackpad mode always uses physical coordinates.
+
+## Choose an input mode
+
+**Trackpad Mode** is the default. Its guide maps the full physical trackpad to QWERTY regardless of cursor position. The persistent guide setting can hide its keyboard drawing while leaving candidate controls available.
+
+**Screen Overlay Mode** places a large translucent QWERTY keyboard on the display containing your cursor. Move the cursor onto the first letter, lift all fingers, then swipe with one finger and lift to see candidates. A contact beginning outside the keyboard is a positioning step: place the cursor, lift, then start again. A stroke that leaves the keyboard requires **Swipe Again**. The cursor remains visible, and a translucent blue trail follows the complete sampled stroke. The overlay receives clicks so taps within its rectangle do not click through into the document. Clicking a candidate commits explicitly. This mode samples screen cursor positions while physical single-finger contact is active; cursor movement by itself does not begin a stroke.
+
+Choose **Overlay Layout…** from the menu or Setup to move and resize a normal preview window with capture off. Its keyboard canvas keeps its aspect ratio. **Use This Layout** saves the canvas's screen position and size for that display, and the opacity slider adjusts key translucency. **Reset Layout** restores that display's default geometry. Return to the intended text field before activating. Calibration is frozen for each stroke; changing displays cancels active capture. Screen Overlay's keyboard remains visible while active, independent of the physical guide setting.
+
+Screen Overlay is implemented and covered by synthetic geometry checks, but physical cursor/contact timing, tap-to-click behavior, multiple displays, and candidate interactions in this mode still need hands-on validation.
 
 ## Build and run
 
