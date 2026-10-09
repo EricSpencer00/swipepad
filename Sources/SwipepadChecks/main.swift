@@ -70,4 +70,56 @@ check(
   !FocusGuard.permits(
     originalPID: 1, currentPID: 1, sameElement: true, secure: false, editable: false),
   "unsettable field")
+// Regression: observed Brave AXTextArea, subrole attributeUnsupported, selectedText writable.
+check(
+  FieldPolicy.permits(
+    role: "AXTextArea", subrole: .absent, selectedTextSettable: true, secureInput: false),
+  "ordinary browser/TextEdit textarea without optional subrole")
+check(
+  FieldPolicy.permits(
+    role: "AXTextArea", subrole: .named("AXUnknown"), selectedTextSettable: true, secureInput: false
+  ), "native text area with explicit ordinary subrole")
+check(
+  FieldPolicy.permits(
+    role: "AXTextField", subrole: .named("AXUnknown"), selectedTextSettable: true,
+    secureInput: false), "ordinary single-line text field")
+check(
+  FieldPolicy.permits(
+    role: "AXTextField", subrole: .named("AXSearchField"), selectedTextSettable: true,
+    secureInput: false), "ordinary search field")
+check(
+  !FieldPolicy.permits(
+    role: "AXTextField", subrole: .named("AXSecureTextField"), selectedTextSettable: true,
+    secureInput: false), "password subrole")
+check(
+  !FieldPolicy.permits(
+    role: "AXTextArea", subrole: .named("AXSecureTextField"), selectedTextSettable: true,
+    secureInput: false), "secure metadata cannot bypass via text area role")
+check(
+  !FieldPolicy.permits(
+    role: "AXTextField", subrole: .absent, selectedTextSettable: true, secureInput: false),
+  "single-line missing safety metadata")
+check(
+  !FieldPolicy.permits(
+    role: "AXTextArea", subrole: .unreadable, selectedTextSettable: true, secureInput: false),
+  "AX metadata errors fail closed")
+check(
+  !FieldPolicy.permits(
+    role: "AXTextArea", subrole: .absent, selectedTextSettable: false, secureInput: false),
+  "read-only text area")
+check(
+  !FieldPolicy.permits(
+    role: "AXTextArea", subrole: .absent, selectedTextSettable: true, secureInput: true),
+  "Secure Input still blocks ordinary textarea")
+check(
+  !FieldPolicy.permits(
+    role: "AXButton", subrole: .absent, selectedTextSettable: true, secureInput: false),
+  "unrelated control")
+check(
+  !FieldPolicy.permits(role: nil, subrole: .absent, selectedTextSettable: true, secureInput: false),
+  "missing role")
+check(
+  !FieldPolicy.permits(
+    role: "AXTextArea", subrole: .named("UnrecognizedSubrole"), selectedTextSettable: true,
+    secureInput: false), "unknown subrole fail closed")
 print("Passed \(count) synthetic core checks. No physical touches or text insertion tested.")

@@ -166,18 +166,26 @@ final class GuidePanel: NSPanel {
     else { return nil }
     return unsafeDowncast(value, to: AXUIElement.self)
   }
-  func editable(_ element: AXUIElement) -> Bool {
-    guard let role = attribute(element, kAXRoleAttribute) as? String,
-      [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role)
-    else { return false }
+  func supportedField(_ element: AXUIElement) -> Bool {
+    let role = attribute(element, kAXRoleAttribute) as? String
+    var value: CFTypeRef?
+    let subroleResult = AXUIElementCopyAttributeValue(
+      element, kAXSubroleAttribute as CFString, &value)
+    let subrole: FieldSubrole
+    if subroleResult == .success, let name = value as? String {
+      subrole = .named(name)
+    } else if subroleResult == .attributeUnsupported || subroleResult == .noValue {
+      subrole = .absent
+    } else {
+      subrole = .unreadable
+    }
     var settable: DarwinBoolean = false
-    return AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
+    let writable =
+      AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
       == .success && settable.boolValue
-  }
-  func secure(_ element: AXUIElement) -> Bool {
-    // Fail closed for fields missing subrole metadata.
-    guard let subrole = attribute(element, kAXSubroleAttribute) as? String else { return true }
-    return subrole == kAXSecureTextFieldSubrole
+    return FieldPolicy.permits(
+      role: role, subrole: subrole, selectedTextSettable: writable,
+      secureInput: IsSecureEventInputEnabled())
   }
   func validTarget() -> Bool {
     guard !IsSecureEventInputEnabled(), let target,
@@ -186,7 +194,8 @@ final class GuidePanel: NSPanel {
     else { return false }
     return FocusGuard.permits(
       originalPID: originalPID, currentPID: app.processIdentifier,
-      sameElement: CFEqual(target, current), secure: secure(current), editable: editable(current))
+      sameElement: CFEqual(target, current), secure: IsSecureEventInputEnabled(),
+      editable: supportedField(current))
   }
   @objc func toggle() {
     if active {
@@ -200,7 +209,7 @@ final class GuidePanel: NSPanel {
     guard !IsSecureEventInputEnabled() else { return }
     guard let app = NSWorkspace.shared.frontmostApplication,
       app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-      let field = focused(app.processIdentifier), !secure(field), editable(field)
+      let field = focused(app.processIdentifier), supportedField(field)
     else {
       status.button?.title = "Swipepad: unsupported field"
       return

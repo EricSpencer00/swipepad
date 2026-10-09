@@ -110,3 +110,29 @@ public enum FocusGuard {
     originalPID == currentPID && sameElement && !secure && editable
   }
 }
+
+/// Only structural field metadata; no field text is read by this policy.
+public enum FieldSubrole: Equatable, Sendable {
+  case named(String)
+  case absent
+  case unreadable
+}
+public enum FieldPolicy {
+  public static func permits(
+    role: String?, subrole: FieldSubrole, selectedTextSettable: Bool, secureInput: Bool
+  ) -> Bool {
+    guard !secureInput, selectedTextSettable else { return false }
+    guard let role, ["AXTextArea", "AXTextField", "AXComboBox"].contains(role) else { return false }
+    switch subrole {
+    case .unreadable:
+      return false
+    case .absent:
+      // AXTextArea has no required subrole; native editors and browser textareas
+      // legitimately return attributeUnsupported/noValue. Text fields still need
+      // explicit nonsecure metadata because password controls share that role.
+      return role == "AXTextArea"
+    case .named(let name):
+      return name == "AXUnknown" || (role == "AXTextField" && name == "AXSearchField")
+    }
+  }
+}
