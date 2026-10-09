@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon
+import Foundation
 import SwipepadCore
 import TrackpadBridge
 
@@ -20,12 +21,10 @@ final class GuidePanel: NSPanel {
           x: p.x * bounds.width - 21, y: p.y * bounds.height - 21, width: 42, height: 42)
         NSColor.controlBackgroundColor.setFill()
         NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
-        String(key).uppercased().draw(
-          at: NSPoint(x: rect.midX - 7, y: rect.midY - 10),
-          withAttributes: [
-            .font: NSFont.systemFont(ofSize: 18, weight: .medium),
-            .foregroundColor: NSColor.labelColor,
-          ])
+        let glyph = String(key).uppercased() as NSString
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 18, weight: .medium), .foregroundColor: NSColor.labelColor]
+        let size = glyph.size(withAttributes: attributes)
+        glyph.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), withAttributes: attributes)
       }
     }
     if let first = path.first {
@@ -34,20 +33,33 @@ final class GuidePanel: NSPanel {
       for p in path.dropFirst() {
         line.line(to: NSPoint(x: p.x * bounds.width, y: p.y * bounds.height))
       }
-      NSColor.systemBlue.setStroke()
+      NSColor.controlAccentColor.setStroke()
       line.lineWidth = 3
       line.stroke()
     }
   }
 }
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   var status: NSStatusItem!
   var panel: GuidePanel!
-  let keyboard = KeyboardView(frame: NSRect(x: 20, y: 100, width: 560, height: 210))
-  let label = NSTextField(labelWithString: "OFF — Double-tap Command in a text field")
+  lazy var keyboard = KeyboardView(frame: NSRect(x: 20, y: 100, width: 560, height: 210))
+  lazy var label = NSTextField(labelWithString: "OFF — Double-tap Command in a text field")
   var buttons: [NSButton] = []
   var hotkey = CommandTap()
   var monitors: [Any] = []
+  var globalMonitor: Any?
+  var globalEventSeen = false
+  var hotkeySeen = false
+  var touchSeen = false
+  var liftSeen = false
+  var lastFocusPreserved: Bool?
+  var lastInsertionSucceeded: Bool?
+  var setupPanel: NSWindow?
+  var setupView: SetupView?
+  var accessRequested = false
+  var setupHeading: NSTextField?
+  var doctorText: NSTextView?
+  var lastTrusted = false
   var listener: OpenMTListener?
   var active = false
   var target: AXUIElement?
@@ -68,52 +80,59 @@ final class GuidePanel: NSPanel {
     hotkey.debounce = UserDefaults.standard.double(forKey: "debounce")
     NSApp.setActivationPolicy(.accessory)
     status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    status.button?.title = "Swipepad OFF"
+    installStatusIcon()
+    status.button?.title = ""
     let menu = NSMenu()
     menu.addItem(
-      withTitle: "Swipepad — experimental physical trackpad typing", action: nil, keyEquivalent: "")
-    menu.addItem(withTitle: "Activate / Cancel", action: #selector(toggle), keyEquivalent: "")
+      withTitle: "Swipepad: Off", action: nil, keyEquivalent: "")
+    menu.addItem(withTitle: "Start Swiping", action: #selector(toggle), keyEquivalent: "")
     menu.addItem(
-      withTitle: "Show keyboard guide", action: #selector(toggleGuide), keyEquivalent: ""
+      withTitle: "Show Keyboard Guide", action: #selector(toggleGuide), keyEquivalent: ""
     ).state = UserDefaults.standard.bool(forKey: "showGuide") ? .on : .off
-    menu.addItem(withTitle: "Hotkey timing…", action: #selector(timing), keyEquivalent: "")
-    menu.addItem(withTitle: "Permission status…", action: #selector(permissions), keyEquivalent: "")
-    menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "q")
+    menu.addItem(withTitle: "Setup…", action: #selector(showSetup), keyEquivalent: "")
+    menu.addItem(withTitle: "Quit Swipepad", action: #selector(quit), keyEquivalent: "q")
     for item in menu.items { item.target = self }
     status.menu = menu
     panel = GuidePanel(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 360),
-      styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
-    panel.title = "Swipepad · physical trackpad · Escape cancels"
+      styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
+    panel.title = "Swipepad"
     panel.level = .floating
     panel.hidesOnDeactivate = false
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    panel.isReleasedWhenClosed = false
+    panel.delegate = self
     panel.center()
-    panel.contentView?.addSubview(keyboard)
-    label.frame = NSRect(x: 20, y: 320, width: 560, height: 22)
-    panel.contentView?.addSubview(label)
+    let guide = NSStackView()
+    guide.orientation = .vertical; guide.alignment = .leading; guide.spacing = 14
+    guide.translatesAutoresizingMaskIntoConstraints = false
+    panel.contentView?.addSubview(guide)
+    if let content = panel.contentView {
+      NSLayoutConstraint.activate([guide.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16), guide.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16), guide.topAnchor.constraint(equalTo: content.topAnchor, constant: 16), guide.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16)])
+    }
+    label.font = .systemFont(ofSize: 15, weight: .semibold)
+    guide.addArrangedSubview(label)
+    keyboard.setAccessibilityElement(true)
+    keyboard.setAccessibilityRole(.group)
+    keyboard.setAccessibilityLabel("Trackpad keyboard guide")
+    guide.addArrangedSubview(keyboard)
+    keyboard.widthAnchor.constraint(equalTo: guide.widthAnchor).isActive = true
+    keyboard.heightAnchor.constraint(equalToConstant: 210).isActive = true
+    let candidates = NSStackView(); candidates.spacing = 8
     for i in 0..<5 {
-      let b = NSButton(title: "", target: self, action: #selector(selectCandidate(_:)))
-      b.tag = i
-      b.frame = NSRect(x: 20 + i * 112, y: 55, width: 108, height: 30)
-      b.isHidden = true
-      buttons.append(b)
-      panel.contentView?.addSubview(b)
+      let button = NSButton(title: "", target: self, action: #selector(selectCandidate(_:)))
+      button.tag = i; button.bezelStyle = .rounded; button.isHidden = true
+      buttons.append(button); candidates.addArrangedSubview(button)
     }
-    let retry = NSButton(title: "Swipe again", target: self, action: #selector(retry))
-    retry.frame = NSRect(x: 20, y: 15, width: 130, height: 28)
-    panel.contentView?.addSubview(retry)
+    guide.addArrangedSubview(candidates)
+    let retry = NSButton(title: "Swipe Again", target: self, action: #selector(retry))
     let cancel = NSButton(title: "Cancel", target: self, action: #selector(toggle))
-    cancel.frame = NSRect(x: 450, y: 15, width: 130, height: 28)
-    panel.contentView?.addSubview(cancel)
-    // No permission requests: only install monitors if existing access is granted.
-    if AXIsProcessTrusted() {
-      if let m = NSEvent.addGlobalMonitorForEvents(
-        matching: [.flagsChanged, .keyDown], handler: { [weak self] event in self?.handle(event) })
-      {
-        monitors.append(m)
-      }
-    }
+    let footer = NSStackView(views: [retry, NSView(), cancel, NSTextField(labelWithString: "Esc")])
+    footer.spacing = 8
+    guide.addArrangedSubview(footer)
+    footer.widthAnchor.constraint(equalTo: guide.widthAnchor).isActive = true
+    reconnectKeyboard()
+    lastTrusted = AXIsProcessTrusted()
     if let m = NSEvent.addLocalMonitorForEvents(
       matching: [.flagsChanged, .keyDown],
       handler: { [weak self] event in
@@ -131,6 +150,27 @@ final class GuidePanel: NSPanel {
         if let self, self.active, !self.validTarget() { self.cancel("Focus changed — cancelled") }
       }
     }
+    DistributedNotificationCenter.default().addObserver(
+      self, selector: #selector(setupNotification(_:)),
+      name: Notification.Name("com.ericspencer00.swipepad.showSetup"), object: nil)
+    DistributedNotificationCenter.default().addObserver(
+      self, selector: #selector(doctorNotification(_:)),
+      name: Notification.Name("com.ericspencer00.swipepad.doctorRequest"), object: nil)
+    Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        let trusted = AXIsProcessTrusted()
+        if trusted != self.lastTrusted {
+          self.lastTrusted = trusted
+          self.reconnectKeyboard()
+        }
+        self.updateModeIndicator()
+        if self.setupPanel?.isVisible == true { self.refreshDoctor() }
+      }
+    }
+    let firstLaunch = !UserDefaults.standard.bool(forKey: "hasLaunched")
+    UserDefaults.standard.set(true, forKey: "hasLaunched")
+    if (firstLaunch && !AXIsProcessTrusted()) || CommandLine.arguments.contains("--setup") { showSetup() }
   }
   func handle(_ e: NSEvent) {
     if IsSecureEventInputEnabled() {
@@ -150,6 +190,7 @@ final class GuidePanel: NSPanel {
       isDown: modifiers.contains(.command), onlyCommand: modifiers.isEmpty || modifiers == .command,
       time: e.timestamp)
     {
+      hotkeySeen = true
       toggle()
     }
   }
@@ -166,7 +207,9 @@ final class GuidePanel: NSPanel {
     else { return nil }
     return unsafeDowncast(value, to: AXUIElement.self)
   }
-  func supportedField(_ element: AXUIElement) -> Bool {
+  func fieldMetadata(_ element: AXUIElement) -> (
+    role: String?, subrole: FieldSubrole, writable: Bool
+  ) {
     let role = attribute(element, kAXRoleAttribute) as? String
     var value: CFTypeRef?
     let subroleResult = AXUIElementCopyAttributeValue(
@@ -183,19 +226,28 @@ final class GuidePanel: NSPanel {
     let writable =
       AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
       == .success && settable.boolValue
+    return (role, subrole, writable)
+  }
+  func supportedField(_ element: AXUIElement) -> Bool {
+    let metadata = fieldMetadata(element)
     return FieldPolicy.permits(
-      role: role, subrole: subrole, selectedTextSettable: writable,
+      role: metadata.role, subrole: metadata.subrole, selectedTextSettable: metadata.writable,
       secureInput: IsSecureEventInputEnabled())
   }
   func validTarget() -> Bool {
     guard !IsSecureEventInputEnabled(), let target,
       let app = NSWorkspace.shared.frontmostApplication,
       let current = focused(app.processIdentifier)
-    else { return false }
-    return FocusGuard.permits(
+    else {
+      if active { lastFocusPreserved = false }
+      return false
+    }
+    let permitted = FocusGuard.permits(
       originalPID: originalPID, currentPID: app.processIdentifier,
       sameElement: CFEqual(target, current), secure: IsSecureEventInputEnabled(),
       editable: supportedField(current))
+    if active { lastFocusPreserved = permitted }
+    return permitted
   }
   @objc func toggle() {
     if active {
@@ -203,15 +255,20 @@ final class GuidePanel: NSPanel {
       return
     }
     guard AXIsProcessTrusted() else {
-      permissions()
+      updateModeIndicator()
+      status?.menu?.items.first?.title = "Swipepad: setup needed — open Setup & Doctor"
       return
     }
-    guard !IsSecureEventInputEnabled() else { return }
+    guard !IsSecureEventInputEnabled() else {
+      cancel("Secure Input active")
+      return
+    }
     guard let app = NSWorkspace.shared.frontmostApplication,
       app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
       let field = focused(app.processIdentifier), supportedField(field)
     else {
-      status.button?.title = "Swipepad: unsupported field"
+      updateModeIndicator()
+      status?.menu?.items.first?.title = "Swipepad: focus a supported text area"
       return
     }
     originalPID = app.processIdentifier
@@ -231,8 +288,9 @@ final class GuidePanel: NSPanel {
       cancel("Trackpad capture unavailable")
       return
     }
-    status.button?.title = "Swipepad ON"
-    label.stringValue = "ON · Slide one finger; lift, then click a candidate to insert"
+    updateModeIndicator()
+    setupPanel?.orderOut(nil)
+    label.stringValue = "Lift all fingers · then swipe one word"
     keyboard.showKeys = UserDefaults.standard.bool(forKey: "showGuide")
     keyboard.path = []
     keyboard.needsDisplay = true
@@ -245,11 +303,12 @@ final class GuidePanel: NSPanel {
       if active && !validTarget() { cancel("Focus changed — cancelled") }
       return
     }
+    touchSeen = true
     let touches = (event.touches as? [OpenMTTouch] ?? []).filter {
       $0.state == .touching || $0.state == .making || $0.state == .starting
     }
     if waitForLift {
-      if touches.isEmpty { waitForLift = false }
+      if touches.isEmpty { waitForLift = false; label.stringValue = "Ready · slide one finger, then lift" }
       return
     }
     if touches.count > 1 {
@@ -273,9 +332,11 @@ final class GuidePanel: NSPanel {
       if path.last.map({ $0.distance(p) > 0.005 }) ?? true {
         if path.count < 512 { path.append(p) }
       }
+      label.stringValue = "Swiping · lift to see words"
       keyboard.path = path
       keyboard.needsDisplay = true
     } else if finger != nil {
+      liftSeen = true
       finger = nil
       guard path.count >= 3, let first = path.first,
         path.contains(where: { first.distance($0) > 0.06 })
@@ -287,9 +348,9 @@ final class GuidePanel: NSPanel {
       pending = !candidates.isEmpty
       for (i, b) in buttons.enumerated() {
         b.isHidden = i >= candidates.count
-        if i < candidates.count { b.title = candidates[i] }
+        if i < candidates.count { b.title = candidates[i]; b.setAccessibilityLabel("Insert " + candidates[i]); b.setAccessibilityHelp("Candidate \(i + 1) of \(candidates.count)") }
       }
-      label.stringValue = "Review candidates · click the intended word · Swipe again to correct"
+      label.stringValue = candidates.isEmpty ? "No match · choose Swipe Again to retry" : "Choose a word · click to insert in your text field"
     }
   }
   @objc func selectCandidate(_ sender: NSButton) {
@@ -300,7 +361,8 @@ final class GuidePanel: NSPanel {
     // Targeted Accessibility write; no clipboard mutation or broadcast key events.
     let result = AXUIElementSetAttributeValue(
       target, kAXSelectedTextAttribute as CFString, (sender.title + " ") as CFString)
-    cancel(result == .success ? "Inserted · OFF" : "Field rejected insertion · OFF")
+    lastInsertionSucceeded = result == .success
+    cancel(result == .success ? "Insertion request accepted · check your text field" : "Field rejected insertion · OFF")
   }
   @objc func retry() {
     guard active, validTarget() else {
@@ -330,13 +392,23 @@ final class GuidePanel: NSPanel {
       $0.isHidden = true
     }
     panel?.orderOut(nil)
-    status?.button?.title = "Swipepad OFF"
+    updateModeIndicator()
     status?.button?.toolTip = reason
     status?.menu?.items.first?.title = "Swipepad: " + reason
     label.stringValue = reason
   }
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    if sender === panel {
+      cancel("Cancelled")
+      return false
+    }
+    return true
+  }
   @objc func appChanged() {
-    if active { cancel("Application changed") }
+    if active {
+      lastFocusPreserved = false
+      cancel("Application changed")
+    }
     hotkey.cancel()
   }
   @objc func toggleGuide(_ sender: NSMenuItem) {
@@ -369,13 +441,6 @@ final class GuidePanel: NSPanel {
       }
     }
   }
-  @objc func permissions() {
-    let alert = NSAlert()
-    alert.messageText = "Swipepad permission status"
-    alert.informativeText =
-      "Accessibility: \(AXIsProcessTrusted() ? "granted" : "not granted"). Required for double-Command observation and targeted text insertion. Swipepad never requests access automatically. Grant only if you choose in System Settings → Privacy & Security → Accessibility, then restart. Global key observation can also depend on Input Monitoring on your macOS version. No permission will be changed here."
-    alert.runModal()
-  }
   @objc func quit() {
     cancel("Quit")
     NSApp.terminate(nil)
@@ -383,9 +448,6 @@ final class GuidePanel: NSPanel {
   func applicationWillTerminate(_ notification: Notification) {
     cancel("Quit")
     for monitor in monitors { NSEvent.removeMonitor(monitor) }
+    if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
   }
 }
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Original Swipepad placeholder: a trackpad and finger trail. Replace freely. -->
+  <rect x="72" y="72" width="880" height="880" rx="190" fill="#263440"/>
+  <rect x="190" y="260" width="644" height="504" rx="84" fill="none" stroke="#dce6ed" stroke-width="34"/>
+  <path d="M300 626 C660 370 364 690 730 402" fill="none" stroke="#7cd7eb" stroke-width="58" stroke-linecap="round"/>
+  <circle cx="730" cy="402" r="37" fill="#7cd7eb"/>
+</svg>

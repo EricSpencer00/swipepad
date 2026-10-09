@@ -122,4 +122,116 @@ check(
   !FieldPolicy.permits(
     role: "AXTextArea", subrole: .named("UnrecognizedSubrole"), selectedTextSettable: true,
     secureInput: false), "unknown subrole fail closed")
+var mock = DoctorInput()
+mock.bundled = true
+mock.identityMatches = true
+mock.signatureValid = true
+mock.accessibility = true
+mock.frameworkPresent = true
+mock.deviceAvailable = true
+mock.live = true
+mock.monitorInstalled = true
+mock.fieldFound = true
+mock.fieldSupported = true
+mock.fieldRole = "AXTextArea"
+mock.fieldSubrole = .absent
+mock.selectedTextSettable = true
+check(
+  Doctor.evaluate(mock).state == "Ready to test",
+  "doctor ready preflight does not imply physical e2e")
+check(
+  Doctor.evaluate(mock).checks.first(where: { $0.id == "insertion" })?.status == .waiting,
+  "doctor never infers insertion from writable metadata")
+check(
+  Doctor.evaluate(mock).checks.first(where: { $0.id == "keyboard" })?.status == .waiting,
+  "doctor waits for keyboard observation")
+check(
+  Doctor.evaluate(mock).checks.allSatisfy { !$0.repair.isEmpty },
+  "each doctor stage supplies an explicit repair or manual step")
+var failed = mock
+failed.accessibility = false
+check(Doctor.evaluate(failed).state == "Setup needed", "doctor missing permission setup state")
+check(
+  Doctor.evaluate(failed).checks.first(where: { $0.id == "accessibility" })?.status == .fail,
+  "doctor denied AX permission")
+failed = mock
+failed.ownedInstances = 2
+check(Doctor.evaluate(failed).state == "Setup needed", "doctor duplicate owned processes")
+failed = mock
+failed.bundled = false
+check(
+  Doctor.evaluate(failed).checks.first(where: { $0.id == "bundle" })?.status == .fail,
+  "doctor bare executable")
+failed = mock
+failed.signatureValid = false
+check(
+  Doctor.evaluate(failed).checks.first(where: { $0.id == "signing" })?.status == .fail,
+  "doctor invalid signature")
+failed = mock
+failed.frameworkPresent = false
+check(
+  Doctor.evaluate(failed).checks.first(where: { $0.id == "trackpad" })?.status == .fail,
+  "doctor private framework missing")
+failed = mock
+failed.deviceAvailable = false
+check(Doctor.evaluate(failed).state == "Setup needed", "doctor no default touch device")
+failed = mock
+failed.secureInput = true
+check(
+  Doctor.evaluate(failed).checks.first(where: { $0.id == "secure-input" })?.status == .fail,
+  "doctor Secure Input blocks")
+failed = mock
+failed.fieldSupported = false
+check(
+  Doctor.evaluate(failed).checks.first(where: { $0.id == "field" })?.status == .fail,
+  "doctor unsupported field repair")
+failed = mock
+failed.live = true
+failed.monitorInstalled = false
+check(Doctor.evaluate(failed).state == "Setup needed", "doctor unavailable live monitor")
+mock.live = true
+mock.monitorInstalled = true
+mock.globalEventSeen = true
+mock.hotkeySeen = true
+mock.touchSeen = true
+mock.liftSeen = true
+mock.focusPreserved = true
+mock.insertionSucceeded = true
+for id in ["keyboard", "hotkey", "touch-lift", "focus", "insertion"] {
+  check(
+    Doctor.evaluate(mock).checks.first(where: { $0.id == id })?.status == .pass,
+    "doctor mocked observation \(id)")
+}
+mock.focusPreserved = false
+mock.insertionSucceeded = false
+check(
+  Doctor.evaluate(mock).checks.first(where: { $0.id == "focus" })?.status == .fail,
+  "doctor wrong focus is not success")
+check(
+  Doctor.evaluate(mock).checks.first(where: { $0.id == "insertion" })?.status == .fail,
+  "doctor AX insertion rejection")
+let machine = try JSONEncoder().encode(Doctor.evaluate(mock))
+let decoded = try JSONDecoder().decode(DoctorReport.self, from: machine)
+check(
+  decoded.schemaVersion == 1 && decoded.checks.count == 12,
+  "doctor machine-readable schema roundtrip")
+var callerTrusted = DoctorInput()
+callerTrusted.accessibility = true
+check(
+  Doctor.evaluate(callerTrusted).checks.first(where: { $0.id == "accessibility" })?.status
+    == .warning, "doctor caller trust cannot stand in for GUI permission")
+check(
+  !RelaunchPolicy.isDistinctLaunch(helperPID: 100, resultPID: 100),
+  "relaunch refuses CLI self-acknowledgement")
+check(
+  !RelaunchPolicy.isDistinctLaunch(helperPID: 100, resultPID: nil),
+  "relaunch requires actual process acknowledgement")
+check(
+  RelaunchPolicy.isDistinctLaunch(helperPID: 100, resultPID: 200),
+  "relaunch accepts distinct GUI process")
+var preflight = mock
+preflight.live = false
+check(
+  Doctor.evaluate(preflight).state.hasPrefix("Preflight only"),
+  "doctor absent live snapshot never presents GUI ready state")
 print("Passed \(count) synthetic core checks. No physical touches or text insertion tested.")
