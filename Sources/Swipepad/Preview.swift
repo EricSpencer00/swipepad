@@ -14,6 +14,7 @@ import Foundation
       view.refresh(); view.layoutSubtreeIfNeeded()
       let window = SetupWindow(contentRect: view.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
       window.contentView = view
+      view.fitWindow()
       window.layoutIfNeeded()
       window.displayIfNeeded()
       view.layoutSubtreeIfNeeded()

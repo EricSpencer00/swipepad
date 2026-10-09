@@ -2,6 +2,7 @@ import AppKit
 @preconcurrency import ApplicationServices
 import Carbon
 import Security
+import CryptoKit
 import SwipepadCore
 import TrackpadBridge
 
@@ -58,7 +59,11 @@ import TrackpadBridge
       input.selectedTextSettable = metadata.writable
       input.fieldSupported = supportedField(field)
     }
-    return Doctor.evaluate(input)
+    var report = Doctor.evaluate(input)
+    let executable = Bundle.main.executableURL
+    let hash = executable.flatMap { try? Data(contentsOf: $0) }.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "unavailable"
+    report.runtimeIdentity = "Responder PID: \(ProcessInfo.processInfo.processIdentifier) · bundle: \(Bundle.main.bundleIdentifier ?? "unbundled")\nExecutable: \(executable?.path ?? "unavailable")\nSHA-256: \(hash)"
+    return report
   }
   @objc func showSetup() {
     cancel("Setup")
@@ -77,9 +82,12 @@ import TrackpadBridge
     window.center()
     setupPanel = window
     setupView = view
+    view.fitWindow()
+    window.center()
   }
   func refreshDoctor() {
     setupView?.refresh()
+    setupView?.fitWindow()
     updateModeIndicator()
   }
   @objc func recheckDoctor() {

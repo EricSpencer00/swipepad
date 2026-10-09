@@ -38,8 +38,9 @@ public struct DoctorReport: Codable, Sendable {
   public let scope: String
   public let state: String
   public let checks: [DoctorCheck]
+  public var runtimeIdentity: String? = nil
   public var text: String {
-    "Swipepad — \(state)\n\(scope)\n\n"
+    "Swipepad — \(state)\n\(scope)\n" + (runtimeIdentity.map { $0 + "\n" } ?? "") + "\n"
       + checks.map {
         "[\($0.status.rawValue.uppercased())] \($0.id): \($0.message)\nNext: \($0.repair)"
       }.joined(separator: "\n\n")
@@ -104,7 +105,7 @@ public enum Doctor {
       input.globalEventSeen
         ? "A global keyboard event was observed (no key/text recorded)."
         : (input.live && !input.monitorInstalled
-          ? "Global event monitor could not be installed."
+          ? (!input.accessibility ? "Keyboard monitor is not installed because this app lacks Accessibility access." : "Global event monitor could not be installed.")
           : "Keyboard delivery has not been observed in this session; monitor installation alone is not proof."),
       "With Accessibility enabled and Secure Input off, click Recheck / reconnect; return to your text area and tap Command. This NSEvent path does not request Input Monitoring. If delivery still fails, use the explicit relaunch action and report the diagnostic state."
     )
