@@ -75,6 +75,8 @@ Both guide presentations use the same recognizer and preserve every physical sam
 
 ## Current checkpoint: end-to-end typing is not qualified
 
+See the [implementation review and fresh test results](docs/IMPLEMENTATION_REVIEW.md) for ranked defects, the repaired cancellation bug, recognition limits and the live acceptance gate.
+
 The current development checkpoint builds and has memory-only handler regressions, but actual Codex typing is failing. A recent installed-app contact trial reached recognition and received one successful AX mutation acknowledgement; the expected content and caret could not be confirmed, so further delivery remained blocked. This is an unresolved mutation, not a successful insertion or a proven no-op. Cursor/window jitter is also reported and has not been reproduced under a controlled test. Do not treat native TextEdit fixtures, generated paths or unit counts as evidence that Codex or all text inputs work.
 
 The next acceptance must verify repeated natural physical strokes, including nearly straight `auto`, exact owned-field text/caret receipts, stable cursor/window behavior and normal input after exit. Until then, use disposable text only and inspect the receiving app after an uncertain write. No automatic text retry or fallback is performed.
