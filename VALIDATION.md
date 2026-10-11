@@ -1,5 +1,28 @@
 # Prototype validation
 
+## Current evidence — October 11
+
+The installed v0.2.23 build passes signature, existing Accessibility trust, sole-instance, clean-Off state, and counters-only diagnostic transport checks. Its physical typing trial is **waiting for the participant**. No current-build physical cross-app end-to-end pass is established. See the [implementation audit](docs/IMPLEMENTATION_REVIEW.md) for current defects and fresh synthetic results.
+
+The following older checks used actual receiving controls and field readback. Generated contacts entered the production handler in a separate harness, bypassing the physical listener. These results establish limited insertion behavior for those snapshots, not current hardware support or accuracy. Browser harnesses compare normalized final text; the production writer separately checks each transaction’s content/caret receipt. These insertion fixtures restrict recognition to three known words, so they cannot measure production vocabulary accuracy.
+
+| Receiving control / path | Verified result | Snapshot and limit |
+| --- | --- | --- |
+| Native single-line and multiline | Nine generated words per field; actual caret/field change refused; delayed queue resumed once after confirmation; secure field received zero writes | v0.2.15 handler + native AX; v0.2.16 repeat aborted before writes because the intended receiver was not foreground |
+| Safari local input, textarea, contenteditable, controlled input | Nine generated words per control; contenteditable Off/reentry preserved separation; password field received zero writes | v0.2.16 writer + actual browser AX; disposable local examples |
+| Brave local input, textarea, contenteditable, controlled input | Same generated-word and refusal matrix passed | v0.2.16 writer + actual browser AX; disposable local examples |
+| Installed hotkey / pointer filter / exit | Synthetic double-Command and Escape worked in native single-line/multiline; generated pointer motion was absorbed; secure activation stayed Off | Installed v0.2.15; no physical contacts or word insertion in this transport check |
+| Codex non-text activation | Stayed Off with zero write attempts, preserved focus, and automatically dismissed its notice | Installed v0.2.21; synthetic Command taps |
+| Codex physical typing | Earlier trial reached recognition and an AX mutation acknowledgement, but expected text/caret were unconfirmed | Failed acceptance; outcome unknown. The user approved retiring that old record without replay. v0.2.23 physical retest pending |
+
+The native/browser fixtures use canonical generated word geometry, including `auto`; their historical “straight-auto” log label does not establish successful recognition of a natural near-straight stroke. The fresh stress test's completely straight A-to-O gesture was wrongly accepted as `ado`.
+
+The older browser/native log hashes were rechecked against their saved manifest before publishing this table. Current-build native/browser regressions, physical input, tap-to-click, hardware axes, observed jitter, sleep/wake, and safe behavior after exit still require coordinated acceptance. No draft was submitted.
+
+## Historical development notes
+
+The entries below describe earlier source snapshots in their original development order. They are not a cumulative pass for the current build; the table above and current audit supersede outdated compatibility and validation statements.
+
 Local deployment of version 0.2.0: the tested release was signed using an explicitly selected existing Developer ID identity and launched at the stable bundle location. Strict on-disk and live-process signature validation pass, as do live Accessibility trust and sole-instance checks. A native driver posted synthetic double-Command and Escape only to a fresh owned TextEdit fixture: fresh final-process state changed Ready → On → Ready, global keyboard delivery/hotkey checks passed, and the exact field/focus/contents remained unchanged. The old signed bundle was retained for rollback. No new permissions or security settings were changed during deployment; the app is not notarized. Physical swipe input and hardware accuracy are still unverified.
 
 Final overlay gate: 119 synthetic core checks pass, including aspect-preserving layout restoration under nonuniform display changes. A separate native harness passes actual resized-layout Save click and 1:1 persisted geometry; three same-process overlay candidate clicks, including a non-first candidate; overlay body click absorption without caret/text/focus changes; exact owned TextEdit receipts and once-only commit; distinct lift endpoint equality between completed trail and decoder samples; native synthetic Escape cancellation; out-of-bounds retry; layout-opening cancellation; changed-contact/multi-contact reset; frozen mode/calibration; actual app-switch cancellation; and native secure/read-only/unsupported control refusal. Cursor movement and touch frames are generated, so these are native interaction checks, not physical swipe accuracy. Original physical-mode receipt/range tests also pass in that run. The prior pre-fix range receipt gap is superseded by these current passing checks; the earlier isolated receipt mismatch has not recurred in fresh fixtures and its cause remains unproven.
