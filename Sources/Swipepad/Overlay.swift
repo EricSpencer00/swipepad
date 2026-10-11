@@ -1,10 +1,12 @@
 import AppKit
+import ApplicationServices
 import SwipepadCore
 
-@MainActor final class OverlayKeyboardView: NSView {
+@MainActor class OverlayKeyboardView: NSView {
   var path:[Point]=[]
   var opacity:CGFloat=0.55
-  override func mouseDown(with event:NSEvent) {} // Absorb presses/taps; never forward into the document.
+  override func acceptsFirstMouse(for event:NSEvent?) -> Bool {true}
+  override func mouseDown(with event:NSEvent) {} // Absorb clicks; physical contacts determine letters.
   override func mouseUp(with event:NSEvent) {}
   override func mouseDragged(with event:NSEvent) {}
   override func draw(_ dirtyRect:NSRect) {
@@ -13,7 +15,8 @@ import SwipepadCore
     let keyWidth=bounds.width/10*0.86,keyHeight=bounds.height/3*0.68
     for (key,point) in Keyboard.keys {
       let rect=NSRect(x:point.x*bounds.width-keyWidth/2,y:point.y*bounds.height-keyHeight/2,width:keyWidth,height:keyHeight)
-      NSColor.controlBackgroundColor.withAlphaComponent(solid ? 1 : opacity).setFill()
+      let currentKey=path.last.flatMap {Keyboard.nearestKey($0)}
+      (currentKey == key ? NSColor.systemBlue : NSColor.controlBackgroundColor).withAlphaComponent(solid ? 1 : opacity).setFill()
       let outline=NSBezierPath(roundedRect:rect,xRadius:10,yRadius:10);outline.fill()
       NSColor.separatorColor.withAlphaComponent(solid ? 1 : 0.7).setStroke();outline.lineWidth=solid ? 2 : 1;outline.stroke()
       let text=String(key).uppercased() as NSString
@@ -23,13 +26,25 @@ import SwipepadCore
     }
     if let first=path.first,path.count>1 {
       let line=NSBezierPath();line.move(to:NSPoint(x:first.x*bounds.width,y:first.y*bounds.height))
-      for point in path.dropFirst() {line.line(to:NSPoint(x:point.x*bounds.width,y:point.y*bounds.height))}
+      for segment in RenderCurve.segments(path) {
+        let a=segment.start,c=segment.control,b=segment.end
+        line.curve(to:NSPoint(x:b.x*bounds.width,y:b.y*bounds.height),
+          controlPoint1:NSPoint(x:(a.x+2*(c.x-a.x)/3)*bounds.width,y:(a.y+2*(c.y-a.y)/3)*bounds.height),
+          controlPoint2:NSPoint(x:(b.x+2*(c.x-b.x)/3)*bounds.width,y:(b.y+2*(c.y-b.y)/3)*bounds.height))
+      }
       line.lineWidth=solid ? 5 : 4;line.lineCapStyle = .round;line.lineJoinStyle = .round
       NSColor.systemBlue.withAlphaComponent(solid ? 0.9 : 0.65).setStroke();line.stroke()
     }
     if let start=path.first {
       NSColor.systemBlue.withAlphaComponent(0.8).setFill()
       NSBezierPath(ovalIn:NSRect(x:start.x*bounds.width-4,y:start.y*bounds.height-4,width:8,height:8)).fill()
+    }
+    if let current=path.last {
+      let center=NSPoint(x:current.x*bounds.width,y:current.y*bounds.height)
+      NSColor.systemBlue.setStroke()
+      let cursor=NSBezierPath(ovalIn:NSRect(x:center.x-8,y:center.y-8,width:16,height:16));cursor.lineWidth=2;cursor.stroke()
+      let cross=NSBezierPath();cross.move(to:NSPoint(x:center.x-12,y:center.y));cross.line(to:NSPoint(x:center.x+12,y:center.y))
+      cross.move(to:NSPoint(x:center.x,y:center.y-12));cross.line(to:NSPoint(x:center.x,y:center.y+12));cross.lineWidth=1.5;cross.stroke()
     }
   }
 }
@@ -56,6 +71,18 @@ import SwipepadCore
     let cursor=NSEvent.mouseLocation
     return NSScreen.screens.first(where: {$0.frame.contains(cursor)}) ?? NSScreen.main ?? NSScreen.screens.first
   }
+  func screenForTarget(_ pid:pid_t) -> NSScreen? {
+    guard let value=attribute(AXUIElementCreateApplication(pid),kAXFocusedWindowAttribute),CFGetTypeID(value)==AXUIElementGetTypeID() else {return NSScreen.main ?? NSScreen.screens.first}
+    let window=unsafeDowncast(value,to:AXUIElement.self)
+    guard let p=attribute(window,kAXPositionAttribute),let s=attribute(window,kAXSizeAttribute),CFGetTypeID(p)==AXValueGetTypeID(),CFGetTypeID(s)==AXValueGetTypeID() else {return NSScreen.main ?? NSScreen.screens.first}
+    var position=CGPoint.zero,size=CGSize.zero
+    guard AXValueGetValue(unsafeDowncast(p,to:AXValue.self),.cgPoint,&position),AXValueGetValue(unsafeDowncast(s,to:AXValue.self),.cgSize,&size) else {return NSScreen.main ?? NSScreen.screens.first}
+    let rect=NSRect(x:position.x,y:(NSScreen.screens.first?.frame.maxY ?? 0)-position.y-size.height,width:size.width,height:size.height)
+    return NSScreen.screens.max {a,b in
+      let x=a.frame.intersection(rect),y=b.frame.intersection(rect)
+      return (x.isNull ? 0 : x.width*x.height)<(y.isNull ? 0 : y.width*y.height)
+    } ?? NSScreen.main
+  }
   func displayKey(_ screen:NSScreen) -> String {"overlayLayout."+String(describing:screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? "default")}
   func defaultOverlayRect(_ screen:NSScreen) -> NSRect {
     let visible=screen.visibleFrame
@@ -69,12 +96,13 @@ import SwipepadCore
     return NSRect(x:rect.x,y:rect.y,width:rect.width,height:rect.height)
   }
   func configureOverlay() {
-    guard let screen=selectedScreen() else {cancel("No display available");return}
+    guard let screen=activationScreen ?? NSScreen.main ?? NSScreen.screens.first else {cancel("No display available");return}
     let rect=overlayRect(screen)
     overlayFrame=CalibrationRect(x:rect.minX,y:rect.minY,width:rect.width,height:rect.height)
     if overlayPanel==nil {
       let overlay=GuidePanel(contentRect:rect,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
       overlay.isOpaque=false;overlay.backgroundColor = .clear;overlay.hasShadow=false
+      overlay.title="Swipepad Screen Keyboard"
       overlay.level = .floating;overlay.ignoresMouseEvents=false;overlay.isMovable=false
       overlay.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary,.ignoresCycle]
       overlay.isReleasedWhenClosed=false;overlay.contentView=overlayKeyboard
@@ -103,12 +131,13 @@ import SwipepadCore
     presentOverlayLayout(on:selectedScreen())
   }
   func presentOverlayLayout(on selected:NSScreen?) {
+    guard !active else {return}
     cancel("Overlay layout preview; capture off")
     layoutPanel?.close()
     guard let screen=selected else {return}
     let rect=overlayRect(screen)
     let window=SetupWindow(contentRect:NSRect(x:rect.minX-16,y:rect.minY-84,width:rect.width+32,height:rect.height+100),styleMask:[.titled,.closable,.resizable,.miniaturizable],backing:.buffered,defer:false)
-    window.title="Overlay Layout · Capture Off";window.isReleasedWhenClosed=false
+    window.title="Guide Layout · Capture Off";window.isReleasedWhenClosed=false
     window.minSize=NSSize(width:420,height:260);window.maxSize=screen.visibleFrame.size
     let preview=LayoutPreviewView(frame:NSRect(x:0,y:0,width:rect.width+32,height:rect.height+100))
     preview.canvas.opacity=CGFloat(UserDefaults.standard.double(forKey:"overlayOpacity"))
@@ -143,6 +172,6 @@ import SwipepadCore
   }
   @objc func displaysChanged() {
     if active {cancel("Display changed; cancelled")}
-    overlayPanel?.orderOut(nil)
+    if active {activationScreen=NSScreen.main;configureOverlay();applyGuideVisibility()} else {overlayPanel?.orderOut(nil)}
   }
 }

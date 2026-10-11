@@ -5,7 +5,7 @@ swift build -c release
 APP=${SWIPEPAD_BUILD_APP:-dist/Swipepad.app}
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Swipepad "$APP/Contents/MacOS/Swipepad"
-cp ThirdParty/* "$APP/Contents/Resources/"
+cp -R ThirdParty/* "$APP/Contents/Resources/"
 swift scripts/make-icon.swift Assets
 iconutil -c icns Assets/Swipepad.iconset -o "$APP/Contents/Resources/Swipepad.icns"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -16,8 +16,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.ericspencer00.swipepad</string>
 <key>CFBundleName</key><string>Swipepad</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.0</string>
-<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleShortVersionString</key><string>0.2.18</string>
+<key>CFBundleVersion</key><string>21</string>
 <key>CFBundleIconFile</key><string>Swipepad</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>

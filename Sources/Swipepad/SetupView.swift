@@ -72,8 +72,7 @@ final class SetupWindow: NSWindow {
     identity.setAccessibilityHelp("Reveal this running copy of Swipepad in Finder")
     let identityRow = NSStackView(views: [running, NSView(), identity])
     identityRow.widthAnchor.constraint(equalToConstant: 480).isActive = true
-    stack.addArrangedSubview(identityRow)
-    stack.addArrangedSubview(location)
+    // Identity details belong behind Diagnostics, not the first-run action.
     location.widthAnchor.constraint(equalToConstant: 480).isActive = true
     disclosure.bezelStyle = .rounded
     disclosure.imagePosition = .imageLeading
@@ -83,14 +82,16 @@ final class SetupWindow: NSWindow {
     disclosure.target = self; disclosure.action = #selector(toggleDiagnostics)
     disclosure.setAccessibilityLabel("Diagnostics")
     disclosure.setAccessibilityValue("Collapsed")
-    stack.addArrangedSubview(NSButton(title:"Overlay Layout…",target:owner,action:#selector(AppDelegate.showOverlayLayout)))
+
     stack.addArrangedSubview(disclosure)
     diagnostics.orientation = .vertical; diagnostics.alignment = .leading; diagnostics.spacing = 8; diagnostics.isHidden = true
     stack.addArrangedSubview(diagnostics)
+    diagnostics.addArrangedSubview(identityRow);diagnostics.addArrangedSubview(location)
+    diagnostics.addArrangedSubview(NSButton(title:"Guide Layout…",target:owner,action:#selector(AppDelegate.showOverlayLayout)))
     let actions: [(String, Selector)] = [("Check Again", #selector(AppDelegate.recheckDoctor)), ("Open Accessibility Settings", #selector(AppDelegate.openAccessibilitySettings)), ("Reset Session", #selector(AppDelegate.resetFromDoctor)), ("Relaunch Swipepad", #selector(AppDelegate.relaunchFromDoctor))]
     for (title, action) in actions { diagnostics.addArrangedSubview(NSButton(title: title, target: owner, action: action)) }
     diagnostics.addArrangedSubview(NSButton(title: "Copy Report", target: self, action: #selector(copyReport)))
-    for (title, key, value) in [("Tap interval (s)", "interval", owner.hotkey.interval), ("Debounce (s)", "debounce", owner.hotkey.debounce)] {
+    for (title, key, value) in [("Tap interval (s)", "interval", owner.hotkey.interval), ("Debounce (s)", "debounce", owner.hotkey.debounce), ("Lift grace (s, 0–0.4)", "liftGrace", owner.liftGraceSeconds)] {
       let field = NSTextField(string: String(value)); field.identifier = NSUserInterfaceItemIdentifier(key); field.target = self; field.action = #selector(saveTiming(_:)); field.widthAnchor.constraint(equalToConstant: 70).isActive = true
       diagnostics.addArrangedSubview(NSStackView(views: [NSTextField(labelWithString: title), field]))
     }
@@ -107,10 +108,10 @@ final class SetupWindow: NSWindow {
     let trusted = previewTrusted ?? AXIsProcessTrusted()
     rows[0].update("Accessibility", detail: trusted ? "on for this app" : "off for this app", state: trusted ? "on" : "off")
     rows[1].update("Double-Command", detail: owner.hotkeySeen ? "seen" : "not tried yet", state: owner.hotkeySeen ? "on" : "waiting")
-    rows[2].update("Swipe and insert", detail: owner.lastInsertionSucceeded == true ? "accepted; confirm the word appeared" : "not tried yet", state: "waiting")
+    rows[2].update("Swipe and insert", detail: owner.lastInsertionSucceeded == true ? "accepted; confirm the word appeared" : "not tried yet", state: owner.lastInsertionSucceeded == true ? "on" : "waiting")
     if !trusted {
       heading.stringValue = owner.accessRequested ? "Turn on Swipepad in Settings" : "Allow Accessibility"
-      detail.stringValue = owner.accessRequested ? "Enable Swipepad in System Settings → Privacy & Security → Accessibility. This running app still reports access off." : "Accessibility lets Swipepad observe double-Command and insert your chosen word into a text field. It does not read field contents."
+      detail.stringValue = owner.accessRequested ? "Enable Swipepad in System Settings → Privacy & Security → Accessibility. This running app still reports access off." : "Accessibility lets Swipepad observe double-Command and insert a word on lift. Safe insertion and optional correction read the focused field’s text transiently to verify the change. Field text and fingerprints are never logged or saved."
       primary.title = owner.accessRequested ? "Open Accessibility Settings" : "Request Access…"
     } else if owner.globalMonitor == nil && previewTrusted == nil {
       heading.stringValue = "Reconnect the shortcut"; detail.stringValue = "Accessibility is on. Reconnect the keyboard listener to try double-Command."; primary.title = "Reconnect"
@@ -120,7 +121,7 @@ final class SetupWindow: NSWindow {
       heading.stringValue = "Paused for secure input"; detail.stringValue = "Leave the secure field, then try in a regular text area."; primary.title = "Close"
     } else {
       heading.stringValue = owner.hotkeySeen ? "Double-Command works" : "Ready to try"
-      detail.stringValue = "Focus a text field. Use double-Command, lift your fingers, then swipe a word and choose a candidate."
+      detail.stringValue = "Focus an editable text area. Double-Command, swipe a word and lift to type it, or tap A/I for a single-letter word. Each new contact starts the next word; only double-Command turns capture off."
       primary.title = "Close and Try"
     }
   }
@@ -150,8 +151,8 @@ final class SetupWindow: NSWindow {
     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(report, forType: .string)
   }
   @objc func saveTiming(_ field: NSTextField) {
-    guard let owner, let key = field.identifier?.rawValue, let value = Double(field.stringValue), (key == "interval" ? 0.2...0.8 : 0.1...1.0).contains(value) else { NSSound.beep(); return }
-    if key == "interval" { owner.hotkey.interval = value } else { owner.hotkey.debounce = value }
+    guard let owner, let key = field.identifier?.rawValue, let value = Double(field.stringValue), (key == "interval" ? 0.2...0.8 : (key == "liftGrace" ? 0...0.4 : 0.1...1.0)).contains(value) else { NSSound.beep(); return }
+    if key == "interval" { owner.hotkey.interval = value } else if key == "liftGrace" {owner.liftGraceSeconds=value} else { owner.hotkey.debounce = value }
     UserDefaults.standard.set(value, forKey: key); owner.hotkey.cancel()
   }
 }

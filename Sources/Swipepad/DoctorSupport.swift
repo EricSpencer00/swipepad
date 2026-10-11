@@ -56,16 +56,22 @@ import TrackpadBridge
       let metadata = fieldMetadata(field)
       input.fieldRole = metadata.role
       input.fieldSubrole = metadata.subrole
-      input.selectedTextSettable = metadata.writable
+      input.targetedInsertionSettable = metadata.writable
       input.fieldSupported = supportedField(field)
     }
     var report = Doctor.evaluate(input)
+    report.capture=captureDiagnostics
+    // Stored structural transaction evidence only: no AXValue, digest, labels or reconciliation.
+    if live {report.outstandingWrites=unresolvedWrites.map {write in
+      OutstandingWriteReport(pid:write.pid,bundleIdentifier:NSRunningApplication(processIdentifier:write.pid)?.bundleIdentifier,expectedCaret:write.expectedCaret)
+    }}
     let executable = Bundle.main.executableURL
     let hash = executable.flatMap { try? Data(contentsOf: $0) }.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "unavailable"
     report.runtimeIdentity = "Input mode: \(inputMode.rawValue)\nResponder PID: \(ProcessInfo.processInfo.processIdentifier) · bundle: \(Bundle.main.bundleIdentifier ?? "unbundled")\nExecutable: \(executable?.path ?? "unavailable")\nSHA-256: \(hash)"
     return report
   }
   @objc func showSetup() {
+    guard !active else {return}
     cancel("Setup")
     if setupPanel == nil { buildSetupPanel() }
     refreshDoctor()
@@ -146,7 +152,9 @@ import TrackpadBridge
         self.handle(event)
       }
     } else if active {
-      cancel("Accessibility access is needed")
+      cancel("OFF")
+      captureDiagnostics.stage="permissionLost";captureDiagnostics.result="accessibilityRequired"
+      showFeedback("Accessibility access is needed · typing is off")
     }
     hotkey.cancel()
     updateModeIndicator()
@@ -160,9 +168,9 @@ import TrackpadBridge
     }
     button.setAccessibilityLabel("Swipepad")
     button.setAccessibilityValue(state)
-    button.toolTip = "Swipepad: " + state
-    status.menu?.items.first?.title = "Swipepad: " + state
-    status.menu?.items.dropFirst().first?.title = active ? "Stop Swiping" : "Start Swiping"
+    button.toolTip = "Swipepad: " + (statusReason ?? state)
+    status.menu?.items.first?.title = "Swipepad: " + (statusReason ?? state)
+    status.menu?.items.dropFirst().first?.title = active ? "Stop Swiping ⌘⌘" : "Start Swiping ⌘⌘"
   }
 
   func installStatusIcon() {

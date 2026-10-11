@@ -170,6 +170,7 @@ static void contactEventHandler(MTDeviceRef eventDevice, MTTouch eventTouches[],
     event.deviceID = *(int *)eventDevice;
     event.frameID = frame;
     event.timestamp = timestamp;
+    event.receivedAt = NSProcessInfo.processInfo.systemUptime;
 
     dispatch_async(dispatch_get_main_queue(), ^{
         if (generation == OpenMTManager.sharedManager.trackingGeneration) {
