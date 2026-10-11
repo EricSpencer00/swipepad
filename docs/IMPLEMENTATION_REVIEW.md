@@ -106,3 +106,5 @@ The user approved retiring the old uncertain record without replay, and v0.2.23 
 ## Sentence continuation repair
 
 Memory-based reproduction found missing separators when appending to existing text and duplicated separators before existing whitespace. The candidate now derives spacing from both sides of the exact selection, preserves punctuation, rejects partial words and broken graphemes, and binds that plan to the writer snapshot. Correction reuses recorded separators. Same-caret content edits invalidate an active stroke; confirmed own writes refresh the continuation digest. Local handler/core tests pass; receiving-control and physical qualification remain pending.
+
+The requested actual Opus 5.5 exact-patch review completed successfully for `dce44f6` with a source pass. Follow-up repairs bind correction to checked content and refuse partial-word ranges before capture; observed trimmed separators are retained accurately. Expanded tests cover both AX backends, correction races and invalid range edges (438 handler, 312 core checks). These minimal follow-ups have local qualification; native/physical compatibility remains unproven.

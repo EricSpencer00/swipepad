@@ -467,8 +467,9 @@ let sentenceCases:[(String,String,Int,Int,String)]=[
  ("nonbreaking whitespace","Hello\u{00a0}",6,0,"Hello\u{00a0}world "),
  ("before exclamation","Hello!",5,0,"Hello world!")
 ]
+for selectedBackend in [true,false] {
 for (label,before,location,length,expected) in sentenceCases {
- let owner=MemoryInput();owner.activate();owner.value=before;owner.caret=CFRange(location:location,length:length)
+ let owner=MemoryInput();owner.selectedTextWritable=selectedBackend;owner.activate();owner.value=before;owner.caret=CFRange(location:location,length:length)
  word(owner,"world")
  check(owner.value==expected,"sentence keeps exact surrounding text: "+label)
  check(owner.captureDiagnostics.writeAttempts==1 && owner.captureDiagnostics.insertions==1 && owner.unresolvedWrites.isEmpty,"sentence commits once with exact content/caret: "+label)
@@ -480,8 +481,10 @@ for (label,before,location,length,expected) in sentenceCases {
  replace.title="test";owner.selectCandidate(replace)
  check(owner.value==expected.replacingOccurrences(of:"world",with:"test") && owner.unresolvedWrites.isEmpty,"second correction keeps same separator policy: "+label)
 }
-for (value,location,length) in [("Hello",2,0),("Hello",2,3),("don't",3,0),("well-known",4,0),("e\u{301}",1,0),("👩‍💻",2,0),("🇺🇸",2,0),("\r\n",1,0),("😀",1,0)] {
+}
+for (value,location,length) in [("Hello",2,0),("Hello",2,3),("don't",3,0),("well-known",4,0),("e\u{301}",1,0),("👩‍💻",2,0),("🇺🇸",2,0),("\r\n",1,0),("😀",1,0),("abc",4,0),("e\u{301}x",1,1)] {
  let owner=MemoryInput();owner.activate();owner.value=value;owner.caret=CFRange(location:location,length:length)
+ check(!owner.acquireTarget(),"partial word/grapheme refuses target before swipe")
  word(owner,"world")
  check(owner.value==value && owner.captureDiagnostics.writeAttempts==0 && owner.unresolvedWrites.isEmpty,"partial word or grapheme refused without mutation at UTF16 \(location)/\(length)")
  owner.cancel("OFF")
@@ -515,3 +518,12 @@ for p in interruptedPoints.dropFirst(5) {frame(sentenceInterrupted,[(9,p,.touchi
 check(sentenceInterrupted.value=="Hullo." && sentenceInterrupted.captureDiagnostics.writeAttempts==0 && sentenceInterrupted.unresolvedWrites.isEmpty,"content change during stroke at same caret refuses insertion")
 sentenceInterrupted.cancel("OFF")
 print("PASS sentence continuation/selection/punctuation/Unicode/interruption checks; total",checks)
+
+let correctionRace=MemoryInput();correctionRace.activate();word(correctionRace,"world");let correctionOwned=correctionRace.lastOwnedWord!;correctionRace.cancel("OFF")
+correctionRace.lastOwnedWord=AppDelegate.OwnedWord(field:correctionOwned.field,pid:correctionOwned.pid,range:correctionOwned.range,alternatives:["world","cat"],fingerprint:correctionOwned.fingerprint)
+// Trigger an edit after the correction-specific snapshot read, before writer binding.
+correctionRace.afterNextValueRead={ correctionRace.afterNextValueRead={ correctionRace.afterNextValueRead={ correctionRace.afterNextValueRead={correctionRace.value += "!"} } } }
+let correctionAttempts=correctionRace.captureDiagnostics.writeAttempts
+correctionRace.selectCandidate(NSButton(title:"cat",target:nil,action:nil))
+check(correctionRace.captureDiagnostics.writeAttempts==correctionAttempts && correctionRace.value=="world !" && correctionRace.unresolvedWrites.isEmpty,"correction snapshot race refuses mutation without retry")
+print("PASS post-Opus correction and early boundary checks; total \(checks)")

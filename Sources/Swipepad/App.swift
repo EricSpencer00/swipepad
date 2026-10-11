@@ -468,6 +468,10 @@ final class GuidePanel: NSPanel {
       }
     }
     guard permitsResolvedWrite(field,pid:pid,range:range) || (pending && permitsPendingCapture(field,pid:pid,range:range)) else {captureDiagnostics.stage="fieldRefused";recordTargetRefusal("unresolvedPreviousWrite");showFeedback("Waiting for the previous write to settle · no further text sent");return false}
+    if let refusal=WordInsertion.boundaryRefusal(content,location:range.location,length:range.length) {
+      captureDiagnostics.stage="fieldRefused";recordTargetRefusal(refusal == .partialWord ? "partialWord":"invalidRange")
+      showFeedback("Use a word boundary or select a whole word · no text sent");return false
+    }
     originalSelection = range
     originalContentDigest=Data(SHA256.hash(data:Data(content.utf8)))
     originalPID = pid
@@ -862,7 +866,7 @@ final class GuidePanel: NSPanel {
       permitsResolvedWrite(field,pid:pid,range:next,resolvePending:true) else {return false}
     originalSelection=next;originalContentDigest=continuationAnchor?.expectedDigest
     captureDiagnostics.insertions += 1;captureDiagnostics.result="Insertion request accepted; caret confirmed"
-    if let digest=fingerprint(field) {lastOwnedWord=OwnedWord(field:field,pid:pid,range:CFRange(location:original.location,length:expectedCaret-original.location),alternatives:alternatives,fingerprint:digest,leadingSeparator:inserted.hasPrefix(" "),trailingSeparator:inserted.hasSuffix(" "))}
+    if let digest=fingerprint(field) {lastOwnedWord=OwnedWord(field:field,pid:pid,range:CFRange(location:original.location,length:expectedCaret-original.location),alternatives:alternatives,fingerprint:digest,leadingSeparator:inserted.hasPrefix(" "),trailingSeparator:inserted.hasSuffix(" ") && transaction?.trimmedSeparator != true)}
     updateModeIndicator();return true
   }
   func restoreCorrectionCaret(_ owned:OwnedWord,selectedRange:CFRange) {
@@ -886,9 +890,11 @@ final class GuidePanel: NSPanel {
     guard let value=AXValueCreate(.cfRange,&range),setAttribute(owned.field,kAXSelectedTextRangeAttribute,value) == .success,
       identity(owned.field,pid:owned.pid),let selected=selection(owned.field),selected.location==range.location,selected.length==range.length,
       fingerprint(owned.field)==owned.fingerprint else {restoreCorrectionCaret(owned,selectedRange:range);lastOwnedWord=nil;cancel("Correction stopped · field changed");return}
+    guard let correctionBefore=attribute(owned.field,kAXValueAttribute) as? String,
+      Data(SHA256.hash(data:Data(correctionBefore.utf8)))==owned.fingerprint else {restoreCorrectionCaret(owned,selectedRange:range);rejectCorrection("contentChanged");return}
     let inserted=(owned.leadingSeparator ? " ":"")+sender.title+(owned.trailingSeparator ? " ":"")
     let previousIDs=Set(unresolvedWrites.map(\.id))
-    let result=replaceSelectedText(owned.field,pid:owned.pid,range:range,inserted:inserted)
+    let result=replaceSelectedText(owned.field,pid:owned.pid,range:range,inserted:inserted,expectedBefore:correctionBefore)
     let transaction=unresolvedWrites.last(where:{!previousIDs.contains($0.id) && $0.pid==owned.pid && CFEqual($0.field,owned.field)})
     guard result == .success,let transaction,identity(owned.field,pid:owned.pid),let next=selection(owned.field),
       InsertionContinuation.permits(originalLocation:range.location,insertedUTF16Count:transaction.expectedCaret-range.location,resultLocation:next.location,resultLength:next.length,sameTarget:true),permitsResolvedWrite(owned.field,pid:owned.pid,range:next,resolvePending:true) else {

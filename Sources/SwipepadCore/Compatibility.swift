@@ -43,17 +43,24 @@ public enum WordInsertion {
       [.openPunctuation,.initialPunctuation].contains($0.properties.generalCategory)
     }
   }
+  public static func boundaryRefusal(_ value:String,location:Int,length:Int)->Refusal? {
+    guard let span=TextReplacement.range(in:value,location:location,length:length) else {return .invalidRange}
+    let previous=span.lowerBound>value.startIndex ? value.index(before:span.lowerBound):nil
+    let next=span.upperBound<value.endIndex ? span.upperBound:nil
+    if span.isEmpty {
+      if let previous,let next,wordCharacter(at:previous,in:value),wordCharacter(at:next,in:value) {return .partialWord}
+    } else {
+      if let previous,wordCharacter(at:previous,in:value),wordCharacter(at:span.lowerBound,in:value) {return .partialWord}
+      if let next,wordCharacter(at:value.index(before:span.upperBound),in:value),wordCharacter(at:next,in:value) {return .partialWord}
+    }
+    return nil
+  }
   public static func plan(_ value:String,location:Int,length:Int,word:String)->Result<Plan,Refusal> {
     guard !word.isEmpty,!word.contains(where:{$0.isWhitespace || $0.isNewline}) else {return .failure(.invalidWord)}
     guard let span=TextReplacement.range(in:value,location:location,length:length) else {return .failure(.invalidRange)}
     let previous=span.lowerBound>value.startIndex ? value.index(before:span.lowerBound):nil
     let next=span.upperBound<value.endIndex ? span.upperBound:nil
-    if span.isEmpty {
-      if let previous,let next,wordCharacter(at:previous,in:value),wordCharacter(at:next,in:value) {return .failure(.partialWord)}
-    } else {
-      if let previous,wordCharacter(at:previous,in:value),wordCharacter(at:span.lowerBound,in:value) {return .failure(.partialWord)}
-      if let next,wordCharacter(at:value.index(before:span.upperBound),in:value),wordCharacter(at:next,in:value) {return .failure(.partialWord)}
-    }
+    if let refusal=boundaryRefusal(value,location:location,length:length) {return .failure(refusal)}
     let leading=previous.map {!value[$0].isWhitespace && !opening(at:$0,in:value)} ?? false
     let trailing=next.map {index in
       let c=value[index]

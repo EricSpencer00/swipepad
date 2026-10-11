@@ -432,6 +432,7 @@ check(WordInsertion.plan("well-known",location:4,length:0,word:"world") == .fail
 check(WordInsertion.plan("",location:0,length:0,word:"") == .failure(.invalidWord),"empty insertion word refused")
 check(WordInsertion.plan("",location:0,length:0,word:"two words") == .failure(.invalidWord),"multiword token refused")
 check(WordInsertion.plan("abc",location:Int.max,length:1,word:"world") == .failure(.invalidRange),"overflowing word-plan location refused")
+check(try! WordInsertion.plan("50%",location:2,length:0,word:"world").get().text==" world","percent suffix uses closing-punctuation spacing policy")
 let display=DisplayBounds(x:0,y:0,width:1000,height:700)
 for point in [Point(0,0),Point(999,0),Point(0,699),Point(999,699)] {
  let safe=CornerAvoidance.redirected(point,displays:[display]);check(safe != point,"active corner redirects pointer")

@@ -4,7 +4,7 @@
 
 The separate v0.2.25 candidate plans word separators from existing text and the exact selection. It preserves existing punctuation/whitespace, replaces complete selected words, and rejects partial-word or split-grapheme insertion. The planning snapshot is checked again before mutation; same-caret content edits during a stroke are refused. Corrections preserve the original leading/trailing separator policy.
 
-Local results: 311 core checks and 352 memory-only production-handler checks passed, including punctuation, selections, Unicode, two successive corrections, delayed queued words, arrow-key interruption, and content-change races. Prepared native sentence fixtures compile but have not run. The separate app builds and passes signature validation; it is not installed or launched. These results do not establish Codex delivery, physical accuracy, or universal text-field compatibility.
+Local results: 312 core checks and 438 memory-only production-handler checks passed, including punctuation, selections, Unicode, two successive corrections, delayed queued words, arrow-key interruption, and content-change races. Both selected-text and value-only backends are covered in memory. The completed source-only Opus 5.5 review of `dce44f6` found no safety blocker and requested correction-snapshot binding and early partial-word refusal; both fixes are locally tested. Prepared native sentence fixtures compile but have not run. The separate app builds and passes signature validation; it is not installed or launched. These results do not establish Codex delivery, physical accuracy, or universal text-field compatibility.
 
 ## Current evidence — October 11
 
