@@ -80,8 +80,9 @@ final class GuidePanel: NSPanel {
   var statusReason:String?
   var feedbackPanel:GuidePanel?
   var feedbackGeneration=0
-  lazy var cornerProtection=HotCornerProtection(isActive:{[weak self] in self?.active == true},failed:{[weak self] in self?.pauseForInputProtectionFailure()},escapePressed:{[weak self] in self?.hotkey.cancel();self?.cancel("OFF")})
+  lazy var cornerProtection=HotCornerProtection(isActive:{[weak self] in self?.active == true},failed:{[weak self] in self?.pauseForInputProtectionFailure()},escapePressed:{[weak self] in self?.hotkey.cancel();self?.cancel("OFF")},observedScroll:{[weak self] in self?.captureDiagnostics.scrollEventsPassed += 1})
   var captureDiagnostics=CaptureDiagnostics()
+  var captureIdentityCache:String?
   var focusLookupErrors:(application:Int?,system:Int?)=(nil,nil)
   let words = WordVocabulary.words
   lazy var gestureLexicon = GestureLexicon(words:words)
@@ -89,6 +90,7 @@ final class GuidePanel: NSPanel {
     menuItem.action == #selector(showLastCorrection) ? (!active && lastOwnedWord != nil) : (menuItem.action == #selector(chooseMode(_:)) ? !active : true)
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
+    _ = captureRuntimeIdentity() // Cache immutable running-build identity while Off.
     _ = gestureLexicon // Build the immutable index while Off, before any capture/listener work.
     _ = WordCommonness.tier("zzzz") // Warm all commonness sets before active capture.
     UserDefaults.standard.register(defaults: [
@@ -217,9 +219,19 @@ final class GuidePanel: NSPanel {
       toggle()
     }
   }
+  func measureAX<T>(_ request:()->T)->T {
+    let start=ProcessInfo.processInfo.systemUptime
+    defer {
+      captureDiagnostics.axRequests += 1
+      let elapsed=(ProcessInfo.processInfo.systemUptime-start)*1000
+      captureDiagnostics.totalAXMilliseconds += elapsed
+      captureDiagnostics.maximumAXMilliseconds=max(captureDiagnostics.maximumAXMilliseconds,elapsed)
+    }
+    return request()
+  }
   func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else {
+    guard measureAX({AXUIElementCopyAttributeValue(element, name as CFString, &value)}) == .success else {
       return nil
     }
     return value
@@ -227,22 +239,22 @@ final class GuidePanel: NSPanel {
   var currentApplicationPID:pid_t? {NSWorkspace.shared.frontmostApplication?.processIdentifier}
   func attributeWritable(_ element:AXUIElement,_ name:String)->Bool {
     var writable:DarwinBoolean=false
-    return AXUIElementIsAttributeSettable(element,name as CFString,&writable) == .success && writable.boolValue
+    return measureAX({AXUIElementIsAttributeSettable(element,name as CFString,&writable)}) == .success && writable.boolValue
   }
   func setAttribute(_ element:AXUIElement,_ name:String,_ value:CFTypeRef)->AXError {
-    AXUIElementSetAttributeValue(element,name as CFString,value)
+    measureAX({AXUIElementSetAttributeValue(element,name as CFString,value)})
   }
   func focused(_ pid: pid_t) -> AXUIElement? {
     focusLookupErrors=(nil,nil)
     func read(_ root:AXUIElement, system:Bool)->AXUIElement? {
       var value:CFTypeRef?
-      let result=AXUIElementCopyAttributeValue(root,kAXFocusedUIElementAttribute as CFString,&value)
+      let result=measureAX({AXUIElementCopyAttributeValue(root,kAXFocusedUIElementAttribute as CFString,&value)})
       if system {focusLookupErrors.system=Int(result.rawValue)}
       else {focusLookupErrors.application=Int(result.rawValue)}
       guard result == .success,let value,CFGetTypeID(value)==AXUIElementGetTypeID() else {return nil}
       let field=unsafeDowncast(value,to:AXUIElement.self)
       var fieldPID:pid_t=0
-      guard AXUIElementGetPid(field,&fieldPID) == .success,fieldPID==pid else {return nil}
+      guard measureAX({AXUIElementGetPid(field,&fieldPID)}) == .success,fieldPID==pid else {return nil}
       return field
     }
     if let field=read(AXUIElementCreateApplication(pid),system:false) {return field}
@@ -255,8 +267,8 @@ final class GuidePanel: NSPanel {
   ) {
     let role = attribute(element, kAXRoleAttribute) as? String
     var value: CFTypeRef?
-    let subroleResult = AXUIElementCopyAttributeValue(
-      element, kAXSubroleAttribute as CFString, &value)
+    let subroleResult = measureAX({AXUIElementCopyAttributeValue(
+      element, kAXSubroleAttribute as CFString, &value)})
     let subrole: FieldSubrole
     if subroleResult == .success, let name = value as? String {
       subrole = .named(name)
@@ -267,11 +279,11 @@ final class GuidePanel: NSPanel {
     }
     var settable: DarwinBoolean = false
     let writable =
-      AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
+      measureAX({AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)})
       == .success && settable.boolValue
     var valueSettable:DarwinBoolean=false,rangeSettable:DarwinBoolean=false
-    let valueWritable=AXUIElementIsAttributeSettable(element,kAXValueAttribute as CFString,&valueSettable) == .success && valueSettable.boolValue
-    let rangeWritable=AXUIElementIsAttributeSettable(element,kAXSelectedTextRangeAttribute as CFString,&rangeSettable) == .success && rangeSettable.boolValue
+    let valueWritable=measureAX({AXUIElementIsAttributeSettable(element,kAXValueAttribute as CFString,&valueSettable)}) == .success && valueSettable.boolValue
+    let rangeWritable=measureAX({AXUIElementIsAttributeSettable(element,kAXSelectedTextRangeAttribute as CFString,&rangeSettable)}) == .success && rangeSettable.boolValue
     // Text input need not expose writable AXValue: normal typing uses the app input pipeline.
     // Still require a readable caret/value and explicit editability before event delivery.
     let editable = (attribute(element,"AXEditable") as? Bool) == true
@@ -299,7 +311,7 @@ final class GuidePanel: NSPanel {
       let pid = currentApplicationPID,
       let current = focused(pid)
     else {
-      if active { lastFocusPreserved = false }
+      if active { lastFocusPreserved = false;captureDiagnostics.focusRejection="focusUnavailable" }
       return false
     }
     let permitted = FocusGuard.permits(
@@ -466,7 +478,7 @@ final class GuidePanel: NSPanel {
     if active {
       captureDiagnostics.callbacks += 1
       for touch in event.touches as? [OpenMTTouch] ?? [] {captureDiagnostics.states[String(touch.state.rawValue),default:0] += 1}
-      let delay=(ProcessInfo.processInfo.systemUptime-event.timestamp)*1000
+      let delay=(ProcessInfo.processInfo.systemUptime-event.receivedAt)*1000
       if delay.isFinite,delay>=0,delay<60_000 {captureDiagnostics.maximumCallbackDelayMilliseconds=max(captureDiagnostics.maximumCallbackDelayMilliseconds,delay)}
     }
     guard active,inputProtectionHealthy else {return}
@@ -523,7 +535,7 @@ final class GuidePanel: NSPanel {
     }
     if touch.state == .making || touch.state == .touching {strokeActualContact=true;touchSeen=true}
     appendSample(touch.point,time:touch.time,phase:strokeSamples.isEmpty ? .began : .moved,sourcePoint:touch.point)
-    captureDiagnostics.stage="swiping";label.stringValue="Swiping · lift to type";renderStroke()
+    captureDiagnostics.stage="swiping";if label.stringValue != "Swiping · lift to type" {label.stringValue="Swiping · lift to type"};renderStroke()
   }
   func deferLift(_ id:Int32) {
     guard liftGraceSeconds>0,strokeActualContact else {finishStroke();return}
@@ -604,13 +616,16 @@ final class GuidePanel: NSPanel {
   }
   func rejectCompletedStroke(_ message:String) {
     captureDiagnostics.rejectedWords += 1
+    captureDiagnostics.rejectionReasons[message,default:0] += 1
     prepareNextStroke(preserveTrail:true);label.stringValue=message
     // Earlier accepted gestures must not wait for a later successful word.
     drainQueuedWords()
   }
   func pauseForInputProtectionFailure() {
+    captureDiagnostics.inputProtectionFailures += 1
     inputProtectionHealthy=false
-    cancel("Mouse protection unavailable · swiping paused; toggle off/on to reconnect")
+    cancel("OFF")
+    showFeedback("Mouse protection unavailable · typing stopped; pointer released")
     captureDiagnostics.stage="inputProtectionPaused"
     captureDiagnostics.result="mouseProtectionUnavailable"
   }
@@ -637,6 +652,7 @@ final class GuidePanel: NSPanel {
     buttons.forEach {$0.isHidden=true};if !preserveTrail {renderStroke()}
   }
   func resetStrokeForRetry(_ message:String) {
+    captureDiagnostics.resetReasons[message.hasPrefix("Multiple fingers") ? "multipleContacts":"contactChanged",default:0] += 1
     prepareNextStroke();label.stringValue=message
   }
   func sameTargetIdentity() -> Bool {
@@ -749,12 +765,12 @@ final class GuidePanel: NSPanel {
     }
     captureDiagnostics.lastAXError=Int(result.rawValue)
     guard result == .success else {return result}
-    if !keyboardBackend {captureDiagnostics.acceptedMutations += 1}
-    if !keyboardBackend && useValueBackend {
+    if !keyboardBackend {
+      captureDiagnostics.acceptedMutations += 1
       write.mutationAccepted=true
       if let index=unresolvedWrites.firstIndex(where:{$0.id==write.id}) {unresolvedWrites[index]=write}
-      return settleDeferredCaret(write.id)
     }
+    if !keyboardBackend && useValueBackend {return settleDeferredCaret(write.id)}
     return result
   }
   // A provider may acknowledge AXValue before publishing the changed value.
@@ -929,6 +945,17 @@ final class GuidePanel: NSPanel {
   func cancel(_ reason: String) {
     deferredLift=nil;liftTimerGeneration += 1
     if active && reason != "OFF" && reason != "Quit" {
+      let category:String
+      switch reason {
+      case "Focus changed — cancelled", "Field changed · next fresh swipe uses the current field",
+        "Focus changed · stroke cancelled", "Focus or caret changed · no word inserted":
+        category=captureDiagnostics.focusRejection ?? "focusChanged"
+      case "Keyboard input · next swipe uses the current field":category="keyboardInput"
+      case "Application changed":category="applicationChanged"
+      default:category="otherCaptureCancel"
+      }
+      captureDiagnostics.cancelReasons[category,default:0] += 1
+      captureDiagnostics.focusRejection=nil
       strokeCancellationGeneration += 1
       retiredToken=strokeToken;lastOwnedWord=nil;pending=false;pendingWriteID=nil;queuedWords=[];continuationAnchor=nil;captureDiagnostics.pendingWords=0
       prepareNextStroke();frameOrdering.reset(receivedAfter:ProcessInfo.processInfo.systemUptime)
@@ -1005,14 +1032,14 @@ final class GuidePanel: NSPanel {
   private var port:CFMachPort?,source:CFRunLoopSource?
   private(set) var capturedButtons:Set<Int64>=[]
   private(set) var startFailureReason:String?
-  let isActive:()->Bool,failed:()->Void,escapePressed:()->Void
-  init(isActive:@escaping ()->Bool,failed:@escaping ()->Void,escapePressed:@escaping ()->Void) {self.isActive=isActive;self.failed=failed;self.escapePressed=escapePressed}
+  let isActive:()->Bool,failed:()->Void,escapePressed:()->Void,observedScroll:()->Void
+  init(isActive:@escaping ()->Bool,failed:@escaping ()->Void,escapePressed:@escaping ()->Void,observedScroll:@escaping ()->Void = {}) {self.isActive=isActive;self.failed=failed;self.escapePressed=escapePressed;self.observedScroll=observedScroll}
   func start()->Bool {
     // Never swallow the release of a drag/click that started in another app.
     guard capturedButtons.isEmpty,NSEvent.pressedMouseButtons==0 else {startFailureReason="Release the mouse button before starting swiping";return false}
     startFailureReason=nil
     stop()
-    let types:[CGEventType]=[.keyDown,.mouseMoved,.leftMouseDragged,.rightMouseDragged,.otherMouseDragged,.leftMouseDown,.leftMouseUp,.rightMouseDown,.rightMouseUp,.otherMouseDown,.otherMouseUp]
+    let types:[CGEventType]=[.keyDown,.scrollWheel,.mouseMoved,.leftMouseDragged,.rightMouseDragged,.otherMouseDragged,.leftMouseDown,.leftMouseUp,.rightMouseDown,.rightMouseUp,.otherMouseDown,.otherMouseUp]
     let mask=types.reduce(CGEventMask(0)) {$0 | (CGEventMask(1)<<$1.rawValue)}
     port=CGEvent.tapCreate(tap:.cghidEventTap,place:.headInsertEventTap,options:.defaultTap,eventsOfInterest:mask,callback:{_,type,event,info in
       guard let info else {return Unmanaged.passUnretained(event)}
@@ -1048,6 +1075,7 @@ final class GuidePanel: NSPanel {
     blocksClick(type) || (isActive() && [.mouseMoved,.leftMouseDragged,.rightMouseDragged,.otherMouseDragged].contains(type))
   }
   func handlePointer(_ type:CGEventType,button:Int64)->Bool {
+    if type == .scrollWheel {if isActive() {observedScroll()};return false} // Observe only; preserve scroll ownership/termination.
     if [.leftMouseDown,.rightMouseDown,.otherMouseDown].contains(type) {
       guard isActive() else {return false}
       capturedButtons.insert(button);return true

@@ -32,15 +32,17 @@ final class MemoryInput:AppDelegate {
   var attributeNamesSet:[String]=[]
   var attemptedWords:[String]=[]
   var acquireCount=0
+  var metadataReads=0
   override var currentApplicationPID:pid_t? {pid}
-  override func focused(_ pid:pid_t)->AXUIElement? {missingFocus ? nil:(chosenField ?? ownedField)}
+  override func focused(_ pid:pid_t)->AXUIElement? {metadataReads += 1;return missingFocus ? nil:(chosenField ?? ownedField)}
   override func attribute(_ field:AXUIElement,_ name:String)->CFTypeRef? {
+    metadataReads += 1
     if name==kAXValueAttribute,let stale=staleValueOnce {staleValueOnce=nil;return stale as CFString}
     return name==kAXValueAttribute ? value as CFString:nil
   }
-  override func attributeWritable(_ field:AXUIElement,_ name:String)->Bool {editable && (name==kAXSelectedTextAttribute ? selectedTextWritable:(name==kAXValueAttribute ? valueWritable:rangeWritable))}
-  override func fieldMetadata(_ field:AXUIElement)->(role:String?,subrole:FieldSubrole,writable:Bool) {(role,subrole,editable)}
-  override func selection(_ field:AXUIElement)->CFRange? {if rangeUnavailableOnce {rangeUnavailableOnce=false;return nil};return caret}
+  override func attributeWritable(_ field:AXUIElement,_ name:String)->Bool {metadataReads += 1;return editable && (name==kAXSelectedTextAttribute ? selectedTextWritable:(name==kAXValueAttribute ? valueWritable:rangeWritable))}
+  override func fieldMetadata(_ field:AXUIElement)->(role:String?,subrole:FieldSubrole,writable:Bool) {metadataReads += 1;return (role,subrole,editable)}
+  override func selection(_ field:AXUIElement)->CFRange? {metadataReads += 1;if rangeUnavailableOnce {rangeUnavailableOnce=false;return nil};return caret}
   override func acquireTarget()->Bool {acquireCount += 1;return super.acquireTarget()}
   override func setAttribute(_ field:AXUIElement,_ name:String,_ input:CFTypeRef)->AXError {
     guard CFEqual(field,ownedField),editable else {return .cannotComplete}
@@ -214,10 +216,10 @@ for p in overflow.dropFirst(6) {frame(capacity,[(10,p,.touching)])};frame(capaci
 check(capacity.value=="cat "+String(repeating:"world ",count:8) && capacity.queuedWords.isEmpty && capacity.captureDiagnostics.writeAttempts==9,"queue-cap refusal releases eight earlier valid words instead of permanent stall")
 let protection=MemoryInput();protection.activate();protection.delayFirst=true;word(protection,"cat");let uncertainty=protection.unresolvedWrites.first!.id
 protection.cornerProtection.failed()
-check(protection.active && !protection.inputProtectionHealthy && protection.captureDiagnostics.stage=="inputProtectionPaused","corner-filter failure leaves mode On but pauses all capture and writes")
+check(!protection.active && !protection.inputProtectionHealthy && protection.captureDiagnostics.stage=="inputProtectionPaused" && protection.captureDiagnostics.inputProtectionFailures==1,"corner-filter failure turns capture Off and releases ordinary input")
 word(protection,"world")
 check(protection.value=="cat " && protection.captureDiagnostics.writeAttempts==1 && protection.unresolvedWrites.first?.id==uncertainty,"protection failure cannot write, discard uncertainty or pass new contact into insertion")
-check(!protection.validTarget() && !protection.identity(protection.ownedField,pid:40001),"protection pause also blocks direct active insertion guards")
+check(!protection.validTarget() && !protection.insertWord("world",alternatives:["world"]),"protection failure cannot resume delivery without explicit activation")
 let normalized=MemoryInput();normalized.activate();normalized.normalizeSeparator=true
 word(normalized,"cat");word(normalized,"world");word(normalized,"auto")
 check(normalized.value=="cat\u{00a0}world\u{00a0}auto\u{00a0}" && normalized.captureDiagnostics.insertions==3 && normalized.unresolvedWrites.isEmpty,"exact new-separator NBSP receipt confirms repeated words and rebases exact bytes")
@@ -334,3 +336,44 @@ check(noFocus.acquireTarget() && noFocus.captureDiagnostics.targetAdmissions==1 
 let refusedSecure=MemoryInput();refusedSecure.subrole = .named("AXSecureTextField")
 check(!refusedSecure.acquireTarget() && refusedSecure.captureDiagnostics.writeAttempts==0 && !refusedSecure.active,"secure input admission remains Off with zero writes")
 print("Passed \(checks) offscreen production repeat-handler checks. Memory-only AX attribute ports with production writer; no real AX/event transport, physical capture, TextEdit or Codex acceptance claim.")
+
+// Lightweight snapshots must not qualify/read/reconcile the field or forget uncertainty.
+let light=MemoryInput();light.activate();light.delayFirst=true;word(light,"cat")
+light.captureIdentityCache="headless-fixture-identity"
+let lightID=light.unresolvedWrites.first!.id,lightRequests=light.captureDiagnostics.axRequests
+let lightAttempts=light.captureDiagnostics.writeAttempts,lightAdmissions=light.captureDiagnostics.targetAdmissions,lightReads=light.metadataReads
+let snapshot=light.captureStatusReport()
+check(snapshot.scope.hasPrefix("Live capture counters") && snapshot.checks.isEmpty && snapshot.runtimeIdentity=="headless-fixture-identity","counter snapshot does not validate signature or rerun doctor qualification")
+check(light.metadataReads==lightReads && light.captureDiagnostics.axRequests==lightRequests && light.captureDiagnostics.writeAttempts==lightAttempts && light.captureDiagnostics.targetAdmissions==lightAdmissions && light.unresolvedWrites.first?.id==lightID,"counter snapshot preserves transaction with no AX or admission/write side effects")
+check(snapshot.outstandingWrites?.first?.transactionID==lightID.uuidString && snapshot.outstandingWrites?.first?.mutationAccepted==true && snapshot.outstandingWrites?.first?.caretAttemptPending==false,"counter snapshot describes accepted transaction and retired caret attempt without content or digest")
+let delayedFrame=MemoryInput();delayedFrame.activate()
+let delayedEvent=OpenMTEvent();delayedEvent.setValue(ProcessInfo.processInfo.systemUptime+10000,forKey:"timestamp");delayedEvent.setValue(ProcessInfo.processInfo.systemUptime-0.02,forKey:"receivedAt");delayedEvent.setValue(Int32(1),forKey:"frameID");delayedEvent.setValue([OpenMTTouch](),forKey:"touches")
+delayedFrame.touchFrame(delayedEvent)
+check(delayedFrame.captureDiagnostics.maximumCallbackDelayMilliseconds>=19,"callback delay uses host receipt clock even when device clock has a different epoch")
+let measured=delayedFrame.measureAX {42}
+check(measured==42 && delayedFrame.captureDiagnostics.axRequests==1 && delayedFrame.captureDiagnostics.maximumAXMilliseconds>=0,"AX instrumentation preserves request return and records structural duration")
+print("PASS additional lightweight diagnostics regressions; total",checks)
+
+let directReceipt=MemoryInput();directReceipt.activate();directReceipt.valueWritable=false;directReceipt.delayFirst=true;word(directReceipt,"cat")
+directReceipt.captureIdentityCache="headless-fixture-identity"
+check(directReceipt.captureStatusReport().outstandingWrites?.first?.mutationAccepted==true && directReceipt.captureDiagnostics.insertions==0,"selected-text AX acknowledgement is reported separately from unconfirmed insertion")
+print("PASS final structural diagnostics checks; total",checks)
+
+let resetEvidence=MemoryInput();resetEvidence.activate();resetEvidence.resetStrokeForRetry("Multiple fingers · lift, then swipe one word")
+check(resetEvidence.captureDiagnostics.resetReasons["multipleContacts"]==1,"multicontact reset is separately counted without recording contact coordinates")
+resetEvidence.target=resetEvidence.ownedField;resetEvidence.originalPID=resetEvidence.pid;resetEvidence.originalSelection=resetEvidence.caret;resetEvidence.missingFocus=true
+check(!resetEvidence.validTarget() && resetEvidence.captureDiagnostics.focusRejection=="focusUnavailable","missing authoritative focus has a structural rejection category")
+resetEvidence.cancel("Field changed · next fresh swipe uses the current field")
+check(resetEvidence.captureDiagnostics.cancelReasons["focusUnavailable"]==1,"active cancellation records the bounded structural focus category")
+resetEvidence.cancel("Keyboard input · next swipe uses the current field")
+check(resetEvidence.captureDiagnostics.cancelReasons["keyboardInput"]==1 && resetEvidence.captureDiagnostics.cancelReasons["focusUnavailable"]==1,"later keyboard cancellation does not inherit a previous focus rejection")
+resetEvidence.captureDiagnostics.focusRejection="selectionChangedOrUnavailable"
+resetEvidence.cancel("Stroke too long; cancelled")
+check(resetEvidence.captureDiagnostics.cancelReasons["otherCaptureCancel"]==1 && resetEvidence.captureDiagnostics.cancelReasons["selectionChangedOrUnavailable"]==nil,"unrelated cancellation does not consume stale focus metadata as its cause")
+var observing=true,passedScrolls=0
+let scrollObserver=HotCornerProtection(isActive:{observing},failed:{},escapePressed:{},observedScroll:{passedScrolls += 1})
+check(!scrollObserver.handlePointer(.scrollWheel,button:0) && passedScrolls==1,"active scroll observation passes the event without new suppression")
+observing=false
+check(!scrollObserver.handlePointer(.scrollWheel,button:0) && passedScrolls==1,"Off scroll events remain unchanged and uncounted")
+check(delayedFrame.captureDiagnostics.totalAXMilliseconds>=delayedFrame.captureDiagnostics.maximumAXMilliseconds,"total measured AX time can expose accumulated work")
+print("PASS all instrumentation and safe-failure checks; total",checks)

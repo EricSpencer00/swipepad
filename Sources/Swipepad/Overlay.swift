@@ -13,9 +13,9 @@ import SwipepadCore
     let workspace=NSWorkspace.shared
     let solid=workspace.accessibilityDisplayShouldReduceTransparency || workspace.accessibilityDisplayShouldIncreaseContrast
     let keyWidth=bounds.width/10*0.86,keyHeight=bounds.height/3*0.68
+    let currentKey=path.last.flatMap {Keyboard.nearestKey($0)}
     for (key,point) in Keyboard.keys {
       let rect=NSRect(x:point.x*bounds.width-keyWidth/2,y:point.y*bounds.height-keyHeight/2,width:keyWidth,height:keyHeight)
-      let currentKey=path.last.flatMap {Keyboard.nearestKey($0)}
       (currentKey == key ? NSColor.systemBlue : NSColor.controlBackgroundColor).withAlphaComponent(solid ? 1 : opacity).setFill()
       let outline=NSBezierPath(roundedRect:rect,xRadius:10,yRadius:10);outline.fill()
       NSColor.separatorColor.withAlphaComponent(solid ? 1 : 0.7).setStroke();outline.lineWidth=solid ? 2 : 1;outline.stroke()

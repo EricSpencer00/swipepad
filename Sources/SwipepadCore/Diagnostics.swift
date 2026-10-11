@@ -37,7 +37,13 @@ public struct OutstandingWriteReport: Codable, Sendable {
   public let pid:Int32
   public let bundleIdentifier:String?
   public let expectedCaret:Int
-  public init(pid:Int32,bundleIdentifier:String?,expectedCaret:Int) {self.pid=pid;self.bundleIdentifier=bundleIdentifier;self.expectedCaret=expectedCaret}
+  public let transactionID:String?
+  public let mutationAccepted:Bool?
+  public let caretAttemptPending:Bool?
+  public init(pid:Int32,bundleIdentifier:String?,expectedCaret:Int,transactionID:String?=nil,mutationAccepted:Bool?=nil,caretAttemptPending:Bool?=nil) {
+    self.pid=pid;self.bundleIdentifier=bundleIdentifier;self.expectedCaret=expectedCaret
+    self.transactionID=transactionID;self.mutationAccepted=mutationAccepted;self.caretAttemptPending=caretAttemptPending
+  }
 }
 public struct DoctorReport: Codable, Sendable {
   public var outstandingWrites:[OutstandingWriteReport]? = nil
@@ -47,6 +53,9 @@ public struct DoctorReport: Codable, Sendable {
   public let checks: [DoctorCheck]
   public var runtimeIdentity: String? = nil
   public var capture: CaptureDiagnostics? = nil
+  public init(schemaVersion:Int=1,scope:String,state:String,checks:[DoctorCheck]=[]) {
+    self.schemaVersion=schemaVersion;self.scope=scope;self.state=state;self.checks=checks
+  }
   public var text: String {
     "Swipepad — \(state)\n\(scope)\n" + (runtimeIdentity.map { $0 + "\n" } ?? "") + "\n"
       + (capture.map { "Capture trial \($0.trial) · mode \($0.mode) · stage \($0.stage)\nCoordinates: normalized physical trackpad\nCallbacks \($0.callbacks) · active frames \($0.contactFrames) · idle frames \($0.idleFrames) · samples \($0.samples) · candidates \($0.candidates) · accepted words \($0.insertions)\nWords: recognized \($0.recognizedWords) · write attempts \($0.writeAttempts) · mutations accepted \($0.acceptedMutations) · confirmed \($0.insertions) · pending \($0.pendingWords) · rejected \($0.rejectedWords) · backend \($0.lastInsertionBackend ?? "none") · AX error \($0.lastAXError.map(String.init) ?? "none")\nInput: \($0.inputCapabilities ?? "not inspected")\nLast target refusal \($0.lastTargetRefusal ?? "none")\nFocus rejection \($0.focusRejection ?? "none") · last result \($0.result ?? "none")\n\n" } ?? "")
@@ -98,6 +107,14 @@ public struct CaptureDiagnostics: Codable, Sendable {
   public var samples=0
   public var candidates=0
   public var maximumCallbackDelayMilliseconds=0.0
+  public var axRequests=0
+  public var maximumAXMilliseconds=0.0
+  public var totalAXMilliseconds=0.0
+  public var resetReasons:[String:Int]=[:]
+  public var cancelReasons:[String:Int]=[:]
+  public var scrollEventsPassed=0
+  public var inputProtectionFailures=0
+  public var rejectionReasons:[String:Int]=[:]
   public var inputCapabilities:String?
   public var focusRejection:String?
   public var result:String?
