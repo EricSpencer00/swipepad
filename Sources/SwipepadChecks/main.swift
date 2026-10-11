@@ -409,6 +409,29 @@ check(TextReplacement.replacing("😀abc",location:0,length:2,with:"I ")=="I abc
 check(TextReplacement.replacing("😀abc",location:1,length:0,with:"x")==nil,"surrogate-interior caret rejected")
 check(TextReplacement.replacing("abc",location:4,length:0,with:"x")==nil,"out-of-range value fallback rejected")
 check(TextReplacement.replacing("abc",location:1,length:Int.max,with:"x")==nil,"overflowing selected span rejected")
+for value in ["e\u{301}","👩‍💻","🇺🇸","\r\n"] {
+  let split=value=="👩‍💻" || value=="🇺🇸" ? 2:1
+  check(TextReplacement.replacing(value,location:split,length:0,with:"x")==nil,"replacement refuses interior of extended grapheme")
+}
+let planned:[(String,Int,Int,String)]=[
+  ("Hello",5,0," world "),("Hello ",6,0,"world "),
+  ("Hello there",5,0," world"),("Hello there",6,0,"world "),
+  ("Hello.",5,0," world"),("Say ()",5,0,"world"),
+  ("Say \"\"",5,0,"world"),("Say “”,",5,0,"world"),
+  ("Say \"hello\"",11,0," world "),("¿",1,0,"world "),("¡",1,0,"world "),
+  ("foo/",4,0," world "),("@",1,0," world "),("\u{fffc}",1,0," world "),
+  ("Hello old friend",6,3,"world"),("Hello old friend",5,5," world "),
+  ("Hello\nnext",5,0," world"),("Hello\u{00a0}",6,0,"world ")]
+for (value,location,length,expected) in planned {
+  check((try? WordInsertion.plan(value,location:location,length:length,word:"world").get())?.text==expected,"word plan uses existing boundaries and preserves exterior")
+}
+check(WordInsertion.plan("Hello",location:2,length:0,word:"world") == .failure(.partialWord),"word plan refuses completion/split guess inside word")
+check(WordInsertion.plan("Hello",location:2,length:3,word:"world") == .failure(.partialWord),"word plan refuses selection edge inside word")
+check(WordInsertion.plan("don't",location:3,length:0,word:"world") == .failure(.partialWord),"apostrophe joining a word is not an insertion boundary")
+check(WordInsertion.plan("well-known",location:4,length:0,word:"world") == .failure(.partialWord),"hyphen joining a word is not an insertion boundary")
+check(WordInsertion.plan("",location:0,length:0,word:"") == .failure(.invalidWord),"empty insertion word refused")
+check(WordInsertion.plan("",location:0,length:0,word:"two words") == .failure(.invalidWord),"multiword token refused")
+check(WordInsertion.plan("abc",location:Int.max,length:1,word:"world") == .failure(.invalidRange),"overflowing word-plan location refused")
 let display=DisplayBounds(x:0,y:0,width:1000,height:700)
 for point in [Point(0,0),Point(999,0),Point(0,699),Point(999,699)] {
  let safe=CornerAvoidance.redirected(point,displays:[display]);check(safe != point,"active corner redirects pointer")

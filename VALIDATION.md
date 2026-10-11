@@ -1,5 +1,11 @@
 # Prototype validation
 
+## Sentence continuation candidate — source/headless qualification
+
+The separate v0.2.25 candidate plans word separators from existing text and the exact selection. It preserves existing punctuation/whitespace, replaces complete selected words, and rejects partial-word or split-grapheme insertion. The planning snapshot is checked again before mutation; same-caret content edits during a stroke are refused. Corrections preserve the original leading/trailing separator policy.
+
+Local results: 311 core checks and 352 memory-only production-handler checks passed, including punctuation, selections, Unicode, two successive corrections, delayed queued words, arrow-key interruption, and content-change races. Prepared native sentence fixtures compile but have not run. The separate app builds and passes signature validation; it is not installed or launched. These results do not establish Codex delivery, physical accuracy, or universal text-field compatibility.
+
 ## Current evidence — October 11
 
 The installed v0.2.23 build passes signature, existing Accessibility trust, sole-instance, clean-Off state, and counters-only diagnostic transport checks. A participant trial now confirms actual callback delivery, recognition and one acknowledged AX mutation, but expected content/caret were not confirmed. Escape exited; the new uncertain transaction remains protected. No current-build physical cross-app end-to-end pass is established. The v0.2.24 selected-text-first candidate is staged separately and has not run. See the [implementation audit](docs/IMPLEMENTATION_REVIEW.md) for current defects and fresh synthetic results.

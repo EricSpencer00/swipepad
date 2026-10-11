@@ -51,6 +51,7 @@ final class GuidePanel: NSPanel {
   var target: AXUIElement?
   var originalPID: pid_t = 0
   var originalSelection: CFRange?
+  var originalContentDigest:Data?
   var finger: Int32?
   var path: [Point] = []
   var pending = false
@@ -62,10 +63,9 @@ final class GuidePanel: NSPanel {
   struct QueuedWord {let word:String;let alternatives:[String];let field:AXUIElement;let pid:pid_t}
   var queuedWords:[QueuedWord]=[]
   var continuationAnchor:UnresolvedWrite?
-  var separatorContinuations:[UnresolvedWrite]=[] // Confirmed metadata only; survives mode exit, never authorizes writes.
   var contactGate=ContactGate()
   var waitForLift:Bool {get {contactGate.waitingForLift} set {contactGate.waitingForLift=newValue}}
-  struct OwnedWord {let field:AXUIElement,pid:pid_t;let range:CFRange;let alternatives:[String];let fingerprint:Data;var leadingSeparator=false}
+  struct OwnedWord {let field:AXUIElement,pid:pid_t;let range:CFRange;let alternatives:[String];let fingerprint:Data;var leadingSeparator=false;var trailingSeparator=true}
   var lastOwnedWord:OwnedWord?
   var lastCompletedSamples:[StrokeSample]=[]
   var frameOrdering=FrameOrdering()
@@ -367,7 +367,7 @@ final class GuidePanel: NSPanel {
     // Refuse before installing capture or suppressing pointer input. A non-text
     // double-Command must leave ordinary input usable without a dismissal click.
     guard acquireTarget() else {
-      target=nil;originalSelection=nil
+      target=nil;originalSelection=nil;originalContentDigest=nil
       updateModeIndicator()
       showActivationRefusal(statusReason ?? "Swipepad stayed off · focused input unavailable")
       return
@@ -400,7 +400,7 @@ final class GuidePanel: NSPanel {
     updateModeIndicator()
     setupPanel?.orderOut(nil)
     label.stringValue = "Ready · swipe and lift to type. Escape or double-Command turns typing off"
-    target=nil;originalSelection=nil
+    target=nil;originalSelection=nil;originalContentDigest=nil
     keyboard.showKeys = UserDefaults.standard.bool(forKey: "showGuide")
     keyboard.path = []
     keyboard.needsDisplay = true
@@ -447,8 +447,9 @@ final class GuidePanel: NSPanel {
       showFeedback("This field does not expose safe editable input · see Setup diagnostics");return false
     }
     // Qualify content only for a requested activation/new stroke, never in the metadata doctor.
-    captureDiagnostics.contentReadable=attribute(field,kAXValueAttribute) as? String != nil
-    guard captureDiagnostics.contentReadable == true else {
+    let content=attribute(field,kAXValueAttribute) as? String
+    captureDiagnostics.contentReadable=content != nil
+    guard let content else {
       captureDiagnostics.stage="fieldRefused";recordTargetRefusal("contentEvidenceUnavailable")
       showFeedback("This field cannot supply safe content evidence · no text sent");return false
     }
@@ -468,6 +469,7 @@ final class GuidePanel: NSPanel {
     }
     guard permitsResolvedWrite(field,pid:pid,range:range) || (pending && permitsPendingCapture(field,pid:pid,range:range)) else {captureDiagnostics.stage="fieldRefused";recordTargetRefusal("unresolvedPreviousWrite");showFeedback("Waiting for the previous write to settle · no further text sent");return false}
     originalSelection = range
+    originalContentDigest=Data(SHA256.hash(data:Data(content.utf8)))
     originalPID = pid
     target = field
     captureDiagnostics.targetAdmissions += 1
@@ -656,7 +658,7 @@ final class GuidePanel: NSPanel {
   }
   func prepareNextStroke(preserveTrail:Bool=false) {
     deferredLift=nil;liftTimerGeneration += 1;bounceCount=0;missingSeconds=0
-    if !pending && queuedWords.isEmpty {target=nil;originalSelection=nil}
+    if !pending && queuedWords.isEmpty {target=nil;originalSelection=nil;originalContentDigest=nil}
     strokeFreshContact=false;strokeActualContact=false;contactGate.rearm();path=[];strokeSamples=[];finger=nil;strokeCalibration=nil
     captureDiagnostics.samples=0;captureDiagnostics.candidates=0;captureDiagnostics.stage="ready"
     buttons.forEach {$0.isHidden=true};if !preserveTrail {renderStroke()}
@@ -689,15 +691,8 @@ final class GuidePanel: NSPanel {
     let item=queuedWords[0]
     guard item.pid==anchor.pid,CFEqual(item.field,anchor.field),identity(item.field,pid:item.pid),let caret=selection(item.field),caret.length==0,caret.location==anchor.expectedCaret,anchor.expectedDigest != nil,fingerprint(item.field)==anchor.expectedDigest else {cancel("Field changed · queued words discarded");return}
     queuedWords.removeFirst();captureDiagnostics.pendingWords=queuedWords.count
-    target=item.field;originalPID=item.pid;originalSelection=caret
+    target=item.field;originalPID=item.pid;originalSelection=caret;originalContentDigest=anchor.expectedDigest
     if insertWord(item.word,alternatives:item.alternatives) {drainQueuedWords()}
-  }
-  func leadingSeparatorNeeded(_ field:AXUIElement,pid:pid_t,range:CFRange)->Bool {
-    guard range.length==0 else {return false}
-    return separatorContinuations.contains {receipt in
-      receipt.pid==pid && CFEqual(receipt.field,field) && receipt.trimmedSeparator &&
-      receipt.expectedCaret==range.location && receipt.expectedDigest != nil && fingerprint(field)==receipt.expectedDigest
-    }
   }
   func matchesReceipt(_ write:UnresolvedWrite,_ digest:Data?)->Bool {
     guard let digest else {return false}
@@ -719,8 +714,6 @@ final class GuidePanel: NSPanel {
       // Anchor the exact observed bytes, including a provider-normalized NEW separator.
       let confirmed=UnresolvedWrite(id:last.id,field:last.field,pid:last.pid,originalRange:last.originalRange,beforeDigest:last.beforeDigest,expectedCaret:last.expectedCaret,expectedDigest:fingerprint(field),trimmedSeparator:last.trimmedSeparator)
       continuationAnchor=confirmed
-      separatorContinuations.removeAll {$0.pid==confirmed.pid && CFEqual($0.field,confirmed.field)}
-      if confirmed.trimmedSeparator {separatorContinuations.append(confirmed)}
     }
     let ids=Set(matching.map(\.id));unresolvedWrites.removeAll {ids.contains($0.id)}
     return true
@@ -736,11 +729,12 @@ final class GuidePanel: NSPanel {
     for event in [down,up] {event.flags=[];event.setIntegerValueField(.eventSourceUserData,value:Self.ownTextEventTag)}
     return (down,up)
   }
-  func replaceSelectedText(_ field:AXUIElement,pid:pid_t,range:CFRange,inserted:String)->AXError {
+  func replaceSelectedText(_ field:AXUIElement,pid:pid_t,range:CFRange,inserted:String,expectedBefore:String?=nil)->AXError {
     guard identity(field,pid:pid),let current=selection(field),current.location==range.location,current.length==range.length,
       permitsResolvedWrite(field,pid:pid,range:range) else {return .cannotComplete}
     let before=attribute(field,kAXValueAttribute) as? String
-    guard let before=before,let expected=TextReplacement.replacing(before,location:range.location,length:range.length,with:inserted) else {return .cannotComplete}
+    guard let before=before,expectedBefore.map({$0==before}) ?? true,
+      let expected=TextReplacement.replacing(before,location:range.location,length:range.length,with:inserted) else {return .cannotComplete}
     let valueBackend=attributeWritable(field,kAXValueAttribute) && attributeWritable(field,kAXSelectedTextRangeAttribute)
     let directBackend=attributeWritable(field,kAXSelectedTextAttribute)
     let keyboardBackend = insertionTransport == .keyboard
@@ -809,9 +803,12 @@ final class GuidePanel: NSPanel {
   }
   func insertWord(_ word:String,alternatives:[String])->Bool {
     guard active,validTarget(),let target,let original=originalSelection else {cancel("Focus or caret changed · no word inserted");return false}
-    let inserted=(leadingSeparatorNeeded(target,pid:originalPID,range:original) ? " ":"")+word+" "
+    guard let before=attribute(target,kAXValueAttribute) as? String,
+      originalContentDigest==Data(SHA256.hash(data:Data(before.utf8))) else {cancel("Content changed during swipe · no word inserted");return false}
+    guard let plan=try? WordInsertion.plan(before,location:original.location,length:original.length,word:word).get() else {cancel("Use a word boundary or select a whole word · no word inserted");return false}
+    let inserted=plan.text
     let priorIDs=Set(unresolvedWrites.map(\.id))
-    let result=replaceSelectedText(target,pid:originalPID,range:original,inserted:inserted)
+    let result=replaceSelectedText(target,pid:originalPID,range:original,inserted:inserted,expectedBefore:before)
     let newWrite=unresolvedWrites.last(where:{!priorIDs.contains($0.id) && $0.pid==originalPID && CFEqual($0.field,target)})
     lastInsertionSucceeded=result == .success
     guard result == .success else {
@@ -863,8 +860,9 @@ final class GuidePanel: NSPanel {
     }
     guard sameTarget,let next=observed,captureDiagnostics.confirmationCaretMatches == true,
       permitsResolvedWrite(field,pid:pid,range:next,resolvePending:true) else {return false}
-    originalSelection=next;captureDiagnostics.insertions += 1;captureDiagnostics.result="Insertion request accepted; caret confirmed"
-    if let digest=fingerprint(field) {lastOwnedWord=OwnedWord(field:field,pid:pid,range:CFRange(location:original.location,length:expectedCaret-original.location),alternatives:alternatives,fingerprint:digest,leadingSeparator:inserted.hasPrefix(" "))}
+    originalSelection=next;originalContentDigest=continuationAnchor?.expectedDigest
+    captureDiagnostics.insertions += 1;captureDiagnostics.result="Insertion request accepted; caret confirmed"
+    if let digest=fingerprint(field) {lastOwnedWord=OwnedWord(field:field,pid:pid,range:CFRange(location:original.location,length:expectedCaret-original.location),alternatives:alternatives,fingerprint:digest,leadingSeparator:inserted.hasPrefix(" "),trailingSeparator:inserted.hasSuffix(" "))}
     updateModeIndicator();return true
   }
   func restoreCorrectionCaret(_ owned:OwnedWord,selectedRange:CFRange) {
@@ -888,7 +886,7 @@ final class GuidePanel: NSPanel {
     guard let value=AXValueCreate(.cfRange,&range),setAttribute(owned.field,kAXSelectedTextRangeAttribute,value) == .success,
       identity(owned.field,pid:owned.pid),let selected=selection(owned.field),selected.location==range.location,selected.length==range.length,
       fingerprint(owned.field)==owned.fingerprint else {restoreCorrectionCaret(owned,selectedRange:range);lastOwnedWord=nil;cancel("Correction stopped · field changed");return}
-    let inserted=(owned.leadingSeparator ? " ":"")+sender.title+" "
+    let inserted=(owned.leadingSeparator ? " ":"")+sender.title+(owned.trailingSeparator ? " ":"")
     let previousIDs=Set(unresolvedWrites.map(\.id))
     let result=replaceSelectedText(owned.field,pid:owned.pid,range:range,inserted:inserted)
     let transaction=unresolvedWrites.last(where:{!previousIDs.contains($0.id) && $0.pid==owned.pid && CFEqual($0.field,owned.field)})
@@ -899,7 +897,7 @@ final class GuidePanel: NSPanel {
       cancel("Correction stopped · check receiving field");return
     }
     if active {originalSelection=next}
-    if let digest=fingerprint(owned.field) {lastOwnedWord=OwnedWord(field:owned.field,pid:owned.pid,range:CFRange(location:range.location,length:transaction.expectedCaret-range.location),alternatives:owned.alternatives,fingerprint:digest,leadingSeparator:owned.leadingSeparator)} else {lastOwnedWord=nil}
+    if let digest=fingerprint(owned.field) {lastOwnedWord=OwnedWord(field:owned.field,pid:owned.pid,range:CFRange(location:range.location,length:transaction.expectedCaret-range.location),alternatives:owned.alternatives,fingerprint:digest,leadingSeparator:owned.leadingSeparator,trailingSeparator:owned.trailingSeparator)} else {lastOwnedWord=nil}
     captureDiagnostics.correctionResult="confirmed"
     label.stringValue=active ? "Last word corrected · swipe next" : "Last word corrected"
     if !active {panel?.orderOut(nil)}
@@ -987,6 +985,7 @@ final class GuidePanel: NSPanel {
     cornerProtection.stop()
     target = nil
     originalSelection = nil
+    originalContentDigest=nil
     path = []
     finger = nil
     keyboard.path = []

@@ -84,6 +84,21 @@ func delayedWriteChecks() {
   setRange(ambiguous.expectedCaret);word("cat",id:55)
   check(text()==last+"test cat ","confirmed mutation boundary allows later fresh word")
 }
+// Prepared native cases; compilation alone does not qualify AX delivery.
+func sentenceChecks() {
+ let cases:[(String,Int,Int,String)]=[
+  ("Hello",5,0,"Hello world "),("Hello there",5,0,"Hello world there"),
+  ("Hello.",5,0,"Hello world."),("Hello old friend",6,3,"Hello world friend"),
+  ("(old)",1,3,"(world)"),("😀 old!",3,3,"😀 world!")]
+ for (seed,location,length,expected) in cases {
+  owner.cancel("Quit")
+  guard let f=field() else {stop("ABORT: sentence fixture lost owned field")}
+  check(AXUIElementSetAttributeValue(f,kAXValueAttribute as CFString,seed as CFString) == .success && text()==seed,"owned sentence seed verified")
+  setRange(location,length);owner.toggle();detach();word("world")
+  check(text()==expected && owner.unresolvedWrites.isEmpty,"native fixed sentence expectation: punctuation/selection/Unicode")
+  owner.cancel("Quit")
+ }
+}
 func run() {
  guard AXIsProcessTrusted(),CGPreflightPostEventAccess(),field() != nil else {stop("BLOCKED: existing permission/exact owned focus")}
  let baseline=text();setRange((baseline as NSString).length);owner.toggle();check(owner.active,"activate once");detach()
@@ -93,7 +108,8 @@ func run() {
  let hoverPoint=Keyboard.keys["a"]!;frame([(10,hoverPoint,.starting)]);frame([(10,hoverPoint,.hovering)]);check(text()==activationText,"starting-to-hover without actual contact cannot auto-write")
 
  for (i,w) in ["cat","world","test"].enumerated() {word(w,id:Int32(i+1));check(owner.active && owner.lastOwnedWord != nil && owner.captureDiagnostics.insertions==i+1,"lift commits word and verifies next caret")}
- check(text()==baseline+"cat world test ","three curved words one activation, zero candidate clicks, exact spacing")
+ let initialSeparator=baseline.last.map { !$0.isWhitespace } ?? false
+ check(text()==baseline+(initialSeparator ? " ":"")+"cat world test ","three curved words one activation, zero candidate clicks, exact spacing")
  let beforeLetters=text()
  var letterExpected=beforeLetters
  for (key,duration) in [(Character("a"),0.05),(Character("i"),0.15),(Character("a"),0.35),(Character("i"),2.0)] {press(key,duration:duration);letterExpected += key=="i" ? "I ":"a ";check(text()==letterExpected,"fresh tap/hold commits once without duration gate")}
@@ -156,6 +172,7 @@ func finishCorrection(expected:String,correction:NSButton) {
  for point in stroke.dropFirst(2) {frame([(30,point,.touching)])};frame([(30,stroke.last!,.breaking)])
  check(owner.active && text()==beforeSwitch,"midstroke caret change discards write while enabled")
  setRange((beforeSwitch as NSString).length);word("world");check(owner.active && text()==beforeSwitch+"world ","next fresh stroke reacquires safe field without toggle")
+ sentenceChecks()
  stop("PASS: production lift lifecycle, auto-write, safe correction and caret regression",true)
 }
 Timer.scheduledTimer(withTimeInterval:0.3,repeats:false) {_ in MainActor.assumeIsolated {

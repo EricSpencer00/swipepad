@@ -36,12 +36,14 @@ final class MemoryInput:AppDelegate {
   var acquireCount=0
   var metadataReads=0
   var beforeTargetValidation:(()->Void)?
+  var afterNextValueRead:(()->Void)?
   override func validTarget()->Bool {beforeTargetValidation?();return super.validTarget()}
   override var currentApplicationPID:pid_t? {pid}
   override func focused(_ pid:pid_t)->AXUIElement? {metadataReads += 1;return missingFocus ? nil:(chosenField ?? ownedField)}
   override func attribute(_ field:AXUIElement,_ name:String)->CFTypeRef? {
     metadataReads += 1
     if name==kAXValueAttribute,let stale=staleValueOnce {staleValueOnce=nil;return stale as CFString}
+    if name==kAXValueAttribute,let callback=afterNextValueRead {afterNextValueRead=nil;let snapshot=value as CFString;callback();return snapshot}
     return name==kAXValueAttribute ? value as CFString:nil
   }
   override func attributeWritable(_ field:AXUIElement,_ name:String)->Bool {metadataReads += 1;return editable && (name==kAXSelectedTextAttribute ? selectedTextWritable:(name==kAXValueAttribute ? valueWritable:rangeWritable))}
@@ -250,7 +252,7 @@ check(trimmed.value==String(repeating:"cat world auto ",count:3).trimmingCharact
 check(trimmed.continuationAnchor?.trimmedSeparator==true && trimmed.caret.location==trimmed.value.utf16.count,"trim receipt anchors exact observed caret and bytes")
 trimmed.active=false
 let last=trimmed.lastOwnedWord!
-trimmed.lastOwnedWord=AppDelegate.OwnedWord(field:last.field,pid:last.pid,range:last.range,alternatives:["auto","cat","world"],fingerprint:last.fingerprint,leadingSeparator:last.leadingSeparator)
+trimmed.lastOwnedWord=AppDelegate.OwnedWord(field:last.field,pid:last.pid,range:last.range,alternatives:["auto","cat","world"],fingerprint:last.fingerprint,leadingSeparator:last.leadingSeparator,trailingSeparator:last.trailingSeparator)
 let alternative=NSButton(title:"cat",target:nil,action:nil);trimmed.selectCandidate(alternative)
 check(trimmed.value.hasSuffix("world cat") && trimmed.unresolvedWrites.isEmpty,"trimmed last-word correction replaces owned leading separator plus word")
 alternative.title="world";trimmed.selectCandidate(alternative)
@@ -259,11 +261,6 @@ trimmed.cancel("OFF");trimmed.activate();word(trimmed,"cat")
 check(trimmed.value.hasSuffix("world world cat") && trimmed.unresolvedWrites.isEmpty,"verified trimmed separator survives exit/reactivation without merging words")
 trimmed.cancel("Application changed");word(trimmed,"auto")
 check(trimmed.value.hasSuffix("world cat auto"),"confirmed delimiter metadata survives cancellation without preserving stale write authority")
-check(!trimmed.leadingSeparatorNeeded(trimmed.otherField,pid:40001,range:trimmed.caret) && !trimmed.leadingSeparatorNeeded(trimmed.ownedField,pid:40002,range:trimmed.caret),"cached delimiter never applies to another PID or field")
-let goodCaret=trimmed.caret
-check(!trimmed.leadingSeparatorNeeded(trimmed.ownedField,pid:40001,range:CFRange(location:0,length:0)),"cached delimiter ignores changed caret")
-trimmed.value += "x"
-check(!trimmed.leadingSeparatorNeeded(trimmed.ownedField,pid:40001,range:goodCaret),"cached delimiter ignores any changed full-field content")
 let unknownProtection=MemoryInput();unknownProtection.activate();unknownProtection.subrole = .unreadable;word(unknownProtection,"cat")
 check(!unknownProtection.active && unknownProtection.captureDiagnostics.writeAttempts==0 && unknownProtection.captureDiagnostics.lastTargetRefusal=="protectionMetadataUnavailable","unreadable protection metadata exits capture with zero writes")
 let escapeOwnership=MemoryInput();escapeOwnership.activate();word(escapeOwnership,"cat");escapeOwnership.cornerProtection.handleCaptureKey(.keyDown,keyCode:53)
@@ -276,7 +273,7 @@ uncertainCorrection.value="cat ";uncertainCorrection.cornerProtection.handleCapt
 let priorAttributeCount=uncertainCorrection.attributeNamesSet.count;uncertainCorrection.selectCandidate(correction)
 check(uncertainCorrection.attributeNamesSet.count==priorAttributeCount && uncertainCorrection.caret.length==0 && uncertainCorrection.unresolvedWrites.first?.id==heldTransaction,"unresolved prior mutation rejects correction before selecting or writing old word")
 let utf=MemoryInput();utf.activate();utf.value="😀";utf.caret=CFRange(location:2,length:0);word(utf,"cat");word(utf,"world")
-check(utf.value=="😀cat world " && utf.caret.location==12,"repeated insertion rebases UTF16 caret after surrogate pair")
+check(utf.value=="😀 cat world " && utf.caret.location==13,"word separation and repeated UTF16 caret preserve surrounding surrogate pair")
 let delayedValue=MemoryInput();delayedValue.activate();delayedValue.selectedTextWritable=false;delayedValue.trimSeparator=true;delayedValue.delayedValuePublication=true
 for _ in 0..<3 {for w in ["cat","world","auto"] {word(delayedValue,w);RunLoop.current.run(until:Date().addingTimeInterval(0.08))}}
 check(delayedValue.value==String(repeating:"cat world auto ",count:3).trimmingCharacters(in:.whitespaces) && delayedValue.captureDiagnostics.insertions==9 && delayedValue.unresolvedWrites.isEmpty,"delayed AXValue publication settles exact trimmed receipt before one caret attempt per word")
@@ -409,7 +406,7 @@ RunLoop.current.run(until:Date().addingTimeInterval(0.16))
 check(graceCancelled.value=="X" && graceCancelled.captureDiagnostics.writeAttempts==0,"old buffered contact cannot write at a new caret after cancellation")
 word(graceCancelled,"test",id:3)
 RunLoop.current.run(until:Date().addingTimeInterval(0.16))
-check(graceCancelled.value=="Xtest " && graceCancelled.captureDiagnostics.writeAttempts==1,"a genuinely fresh post-lift contact can use the new caret once")
+check(graceCancelled.value=="X test " && graceCancelled.captureDiagnostics.writeAttempts==1,"a genuinely fresh post-lift contact can use the new caret once")
 graceCancelled.cancel("OFF")
 print("PASS buffered-contact cancellation regressions; total",checks)
 
@@ -447,3 +444,74 @@ RunLoop.current.run(until:Date().addingTimeInterval(0.14))
 check(bufferedPending.value=="cat test " && bufferedPending.captureDiagnostics.writeAttempts==2 && bufferedPending.unresolvedWrites.isEmpty,"confirmed prior write drains the legitimate buffered word exactly once")
 bufferedPending.cancel("OFF")
 print("PASS all deferred replay paths and pending continuation; total",checks)
+
+
+// Existing sentences: fixed expectations, production contact handlers, memory-only fields.
+let sentenceCases:[(String,String,Int,Int,String)]=[
+ ("append without separator","Hello",5,0,"Hello world "),
+ ("append existing separator","Hello ",6,0,"Hello world "),
+ ("middle before existing space","Hello there.",5,0,"Hello world there."),
+ ("middle after existing space","Hello there.",6,0,"Hello world there."),
+ ("before period","Hello.",5,0,"Hello world."),
+ ("after comma","Hello, friend",6,0,"Hello, world friend"),
+ ("parentheses","Say ()",5,0,"Say (world)"),
+ ("straight quotes","Say \"\"",5,0,"Say \"world\""),
+ ("curly quotes","Say “”, please",5,0,"Say “world”, please"),
+ ("selected word","Hello old friend.",6,3,"Hello world friend."),
+ ("selection includes separators","Hello old friend",5,5,"Hello world friend"),
+ ("whole selection","Hello old",0,9,"world "),
+ ("emoji neighbour","😀",2,0,"😀 world "),
+ ("surrogate selection","😀!",0,2,"world!"),
+ ("newline suffix","Hello\nthere",5,0,"Hello world\nthere"),
+ ("newline prefix","Hello\nthere",6,0,"Hello\nworld there"),
+ ("nonbreaking whitespace","Hello\u{00a0}",6,0,"Hello\u{00a0}world "),
+ ("before exclamation","Hello!",5,0,"Hello world!")
+]
+for (label,before,location,length,expected) in sentenceCases {
+ let owner=MemoryInput();owner.activate();owner.value=before;owner.caret=CFRange(location:location,length:length)
+ word(owner,"world")
+ check(owner.value==expected,"sentence keeps exact surrounding text: "+label)
+ check(owner.captureDiagnostics.writeAttempts==1 && owner.captureDiagnostics.insertions==1 && owner.unresolvedWrites.isEmpty,"sentence commits once with exact content/caret: "+label)
+ let owned=owner.lastOwnedWord!;owner.cancel("OFF")
+ owner.lastOwnedWord=AppDelegate.OwnedWord(field:owned.field,pid:owned.pid,range:owned.range,alternatives:["world","cat","test"],fingerprint:owned.fingerprint,leadingSeparator:owned.leadingSeparator,trailingSeparator:owned.trailingSeparator)
+ let replace=NSButton(title:"cat",target:nil,action:nil);owner.selectCandidate(replace)
+ let corrected=expected.replacingOccurrences(of:"world",with:"cat")
+ check(owner.value==corrected && owner.unresolvedWrites.isEmpty,"correction preserves existing separators/punctuation: "+label)
+ replace.title="test";owner.selectCandidate(replace)
+ check(owner.value==expected.replacingOccurrences(of:"world",with:"test") && owner.unresolvedWrites.isEmpty,"second correction keeps same separator policy: "+label)
+}
+for (value,location,length) in [("Hello",2,0),("Hello",2,3),("don't",3,0),("well-known",4,0),("e\u{301}",1,0),("👩‍💻",2,0),("🇺🇸",2,0),("\r\n",1,0),("😀",1,0)] {
+ let owner=MemoryInput();owner.activate();owner.value=value;owner.caret=CFRange(location:location,length:length)
+ word(owner,"world")
+ check(owner.value==value && owner.captureDiagnostics.writeAttempts==0 && owner.unresolvedWrites.isEmpty,"partial word or grapheme refused without mutation at UTF16 \(location)/\(length)")
+ owner.cancel("OFF")
+}
+let sentenceRepeat=MemoryInput();sentenceRepeat.activate();sentenceRepeat.value="Hello there.";sentenceRepeat.caret=CFRange(location:5,length:0)
+for w in ["world","cat","test"] {word(sentenceRepeat,w)}
+check(sentenceRepeat.value=="Hello world cat test there." && sentenceRepeat.captureDiagnostics.insertions==3,"three lifts build on the live middle caret and preserve suffix")
+sentenceRepeat.cancel("OFF")
+let sentenceQueued=MemoryInput();sentenceQueued.activate();sentenceQueued.value="Hello there.";sentenceQueued.caret=CFRange(location:5,length:0);sentenceQueued.delayFirst=true
+for w in ["world","cat","test"] {word(sentenceQueued,w)}
+check(sentenceQueued.value=="Hello world there." && sentenceQueued.captureDiagnostics.writeAttempts==1 && sentenceQueued.queuedWords.count==2,"sentence queue holds later words while first exact caret is delayed")
+sentenceQueued.caret=CFRange(location:11,length:0);RunLoop.current.run(until:Date().addingTimeInterval(0.18))
+check(sentenceQueued.value=="Hello world cat test there." && sentenceQueued.captureDiagnostics.writeAttempts==3 && sentenceQueued.unresolvedWrites.isEmpty,"queued words plan at verified live caret when drained")
+sentenceQueued.cancel("OFF")
+let sentenceArrow=MemoryInput();sentenceArrow.activate();sentenceArrow.value="Hello there.";sentenceArrow.caret=CFRange(location:5,length:0);word(sentenceArrow,"world")
+let arrow=NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:time,windowNumber:0,context:nil,characters:"",charactersIgnoringModifiers:"",isARepeat:false,keyCode:123)!
+sentenceArrow.handle(arrow);sentenceArrow.caret=CFRange(location:sentenceArrow.value.utf16.count,length:0);word(sentenceArrow,"cat")
+check(sentenceArrow.value=="Hello world there. cat " && sentenceArrow.captureDiagnostics.insertions==2,"explicit keyboard caret move clears old anchor and replans at fresh caret")
+sentenceArrow.cancel("OFF")
+let sentenceRace=MemoryInput();sentenceRace.activate();sentenceRace.value="Hello.";sentenceRace.caret=CFRange(location:5,length:0)
+check(sentenceRace.acquireTarget(),"sentence race target acquired")
+sentenceRace.afterNextValueRead={sentenceRace.value="Hullo."}
+_ = sentenceRace.insertWord("world",alternatives:["world"])
+check(sentenceRace.value=="Hullo." && sentenceRace.captureDiagnostics.writeAttempts==0 && sentenceRace.unresolvedWrites.isEmpty,"edit between planning and writer snapshot refuses stale plan with zero mutation")
+sentenceRace.cancel("OFF")
+let sentenceInterrupted=MemoryInput();sentenceInterrupted.activate();sentenceInterrupted.value="Hello.";sentenceInterrupted.caret=CFRange(location:5,length:0)
+let interruptedPoints=points("world")
+for (i,p) in interruptedPoints.prefix(5).enumerated() {frame(sentenceInterrupted,[(9,p,i==0 ? .starting:.touching)])}
+sentenceInterrupted.value="Hullo."
+for p in interruptedPoints.dropFirst(5) {frame(sentenceInterrupted,[(9,p,.touching)])};frame(sentenceInterrupted,[(9,interruptedPoints.last!,.breaking)])
+check(sentenceInterrupted.value=="Hullo." && sentenceInterrupted.captureDiagnostics.writeAttempts==0 && sentenceInterrupted.unresolvedWrites.isEmpty,"content change during stroke at same caret refuses insertion")
+sentenceInterrupted.cancel("OFF")
+print("PASS sentence continuation/selection/punctuation/Unicode/interruption checks; total",checks)
