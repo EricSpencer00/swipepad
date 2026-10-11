@@ -37,6 +37,7 @@ final class MemoryInput:AppDelegate {
   var metadataReads=0
   var beforeTargetValidation:(()->Void)?
   var afterNextValueRead:(()->Void)?
+  var valueSetterOverride:((String)->String)?
   override func validTarget()->Bool {beforeTargetValidation?();return super.validTarget()}
   override var currentApplicationPID:pid_t? {pid}
   override func focused(_ pid:pid_t)->AXUIElement? {metadataReads += 1;return missingFocus ? nil:(chosenField ?? ownedField)}
@@ -58,7 +59,7 @@ final class MemoryInput:AppDelegate {
       let expected=TextReplacement.replacing(value,location:caret.location,length:caret.length,with:text) {
       attemptedWords.append(text);value=expected
       if delayFirst {delayFirst=false} else {caret=CFRange(location:caret.location+text.utf16.count,length:0)}
-    } else if name==kAXValueAttribute,let text=input as? String {if delayedValuePublication {staleValueOnce=value};value=text.hasSuffix(" ") && trimSeparator ? String(text.dropLast()):(normalizeSeparator && text.hasSuffix(" ") ? String(text.dropLast())+"\u{00a0}":text)}
+    } else if name==kAXValueAttribute,let text=input as? String {if delayedValuePublication {staleValueOnce=value};value=valueSetterOverride?(text) ?? (text.hasSuffix(" ") && trimSeparator ? String(text.dropLast()):(normalizeSeparator && text.hasSuffix(" ") ? String(text.dropLast())+"\u{00a0}":text))}
     else if name==kAXSelectedTextRangeAttribute,CFGetTypeID(input)==AXValueGetTypeID() {
       if rejectCaretSetter {return .cannotComplete}
       var range=CFRange();guard AXValueGetValue(unsafeDowncast(input,to:AXValue.self),.cfRange,&range) else {return .illegalArgument}
@@ -521,9 +522,35 @@ print("PASS sentence continuation/selection/punctuation/Unicode/interruption che
 
 let correctionRace=MemoryInput();correctionRace.activate();word(correctionRace,"world");let correctionOwned=correctionRace.lastOwnedWord!;correctionRace.cancel("OFF")
 correctionRace.lastOwnedWord=AppDelegate.OwnedWord(field:correctionOwned.field,pid:correctionOwned.pid,range:correctionOwned.range,alternatives:["world","cat"],fingerprint:correctionOwned.fingerprint)
-// Trigger an edit after the correction-specific snapshot read, before writer binding.
+// Edit after the writer first content read; its second check must refuse before allocation.
 correctionRace.afterNextValueRead={ correctionRace.afterNextValueRead={ correctionRace.afterNextValueRead={ correctionRace.afterNextValueRead={correctionRace.value += "!"} } } }
 let correctionAttempts=correctionRace.captureDiagnostics.writeAttempts
 correctionRace.selectCandidate(NSButton(title:"cat",target:nil,action:nil))
 check(correctionRace.captureDiagnostics.writeAttempts==correctionAttempts && correctionRace.value=="world !" && correctionRace.unresolvedWrites.isEmpty,"correction snapshot race refuses mutation without retry")
 print("PASS post-Opus correction and early boundary checks; total \(checks)")
+
+let boundWriter=MemoryInput();boundWriter.activate();boundWriter.value="Hello";boundWriter.caret=CFRange(location:5,length:0)
+check(boundWriter.replaceSelectedText(boundWriter.ownedField,pid:40001,range:boundWriter.caret,inserted:" world ",expectedBefore:"Hullo") == .cannotComplete && boundWriter.unresolvedWrites.isEmpty && boundWriter.attributeNamesSet.isEmpty && boundWriter.captureDiagnostics.writeAttempts==0,"writer refuses stale plan before uncertainty allocation")
+boundWriter.cancel("OFF")
+let noOpBound=MemoryInput();noOpBound.activate();noOpBound.acknowledgeSelectedTextWithoutEditing=true
+word(noOpBound,"cat");word(noOpBound,"world",id:2)
+let noOpID=noOpBound.unresolvedWrites.first!.id
+check(noOpBound.pending && noOpBound.queuedWords.count==1,"no-op ACK holds next word without sending")
+let thirdState=MemoryInput();thirdState.selectedTextWritable=false;thirdState.activate();thirdState.value="Hi";thirdState.caret=CFRange(location:2,length:0)
+thirdState.valueSetterOverride={_ in thirdState.caret=CFRange(location:0,length:0);return "Hi?"}
+word(thirdState,"world")
+let thirdID=thirdState.unresolvedWrites.first!.id
+check(thirdState.captureDiagnostics.lastInsertionBackend=="valueAndCaret" && thirdState.captureDiagnostics.lastAXError==0 && thirdState.captureDiagnostics.acceptedMutations==1 && thirdState.captureDiagnostics.insertions==0,"third-state accepted value write has zero confirmed insertions")
+check(thirdState.captureDiagnostics.expectedCaret==9 && thirdState.captureDiagnostics.observedCaretLocation==0 && thirdState.captureDiagnostics.confirmationContentMatches==false && thirdState.captureDiagnostics.confirmationBeforeContentMatches==false,"third state mirrors physical structural receipt")
+check(thirdState.attributeNamesSet==[kAXValueAttribute],"third state has no caret placement or retry")
+RunLoop.current.run(until:Date().addingTimeInterval(AppDelegate.acceptedWriteSettleSeconds+0.45))
+for (owner,id,label) in [(noOpBound,noOpID,"no-op ACK"),(thirdState,thirdID,"third state")] {
+ check(!owner.active && !owner.pending && owner.queuedWords.isEmpty && owner.unresolvedWrites.map(\.id)==[id],"\(label) bounded stop retains exactly its record")
+ check(owner.captureDiagnostics.stage=="acceptedWriteUnresolved" && owner.captureDiagnostics.writeAttempts==1,"\(label) stop diagnosed without resend")
+ check(!owner.cornerProtection.blocksPointerAction(.mouseMoved) && !owner.cornerProtection.blocksPointerAction(.leftMouseDown),"\(label) ordinary pointer resumes")
+}
+check(noOpBound.attributeNamesSet==[kAXSelectedTextAttribute] && thirdState.attributeNamesSet==[kAXValueAttribute],"bounded stop adds no AX mutation")
+noOpBound.activate();let refusedBefore=noOpBound.value;word(noOpBound,"test",id:5)
+check(noOpBound.value==refusedBefore && noOpBound.captureDiagnostics.writeAttempts==1 && noOpBound.captureDiagnostics.lastTargetRefusal=="unresolvedPreviousWrite","reactivation still refuses pending evidence")
+noOpBound.cancel("OFF");thirdState.cancel("OFF")
+print("PASS concrete Claude bounded-wait fix; total \(checks)")

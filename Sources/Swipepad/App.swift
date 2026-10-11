@@ -823,6 +823,8 @@ final class GuidePanel: NSPanel {
     if let write=newWrite {beginCaretWait(write,original:original,inserted:inserted,alternatives:alternatives)}
     return false
   }
+  // Total settle budget is the initial 250ms plus this bounded slow wait.
+  static let acceptedWriteSettleSeconds=2.0
   func beginCaretWait(_ write:UnresolvedWrite,original:CFRange,inserted:String,alternatives:[String]) {
     pending=true;pendingWriteID=write.id
     captureDiagnostics.pendingWords=queuedWords.count+1;captureDiagnostics.stage="confirmingAcceptedWrite"
@@ -841,7 +843,16 @@ final class GuidePanel: NSPanel {
       if finger==nil {prepareNextStroke(preserveTrail:true)}
       drainQueuedWords();return
     }
-    captureDiagnostics.confirmationWaitMilliseconds=max(0,(ProcessInfo.processInfo.systemUptime-(deadline-0.25))*1000)
+    let now=ProcessInfo.processInfo.systemUptime
+    captureDiagnostics.confirmationWaitMilliseconds=max(0,(now-(deadline-0.25))*1000)
+    if now>=deadline+Self.acceptedWriteSettleSeconds {
+      // Unsent queued words drop; uncertain mutation evidence must survive.
+      cancel("OFF")
+      captureDiagnostics.stage="acceptedWriteUnresolved";captureDiagnostics.result="Write unresolved · capture stopped; record retained"
+      showFeedback("Last word not confirmed · check the field; nothing was retried")
+      if NSApp != nil {showActivationRefusal("Last word not confirmed · check the field; nothing was retried")}
+      return
+    }
     let slow=ProcessInfo.processInfo.systemUptime>=deadline
     if slow {captureDiagnostics.stage="waitingForAcceptedWrite";captureDiagnostics.result="Write unresolved · further delivery held safely"}
     DispatchQueue.main.asyncAfter(deadline:.now()+(slow ? 0.1:0.02)) {[weak self] in
