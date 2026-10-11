@@ -1,6 +1,6 @@
 # Implementation review — 2026-10-11
 
-Review baseline: `94af7a7`. The reproduced cancellation defect below is repaired in `800d609`. This is a development audit, not release approval. Actual repeated Codex typing and reported jitter remain unresolved. The signed v0.2.23 candidate containing the repair is now installed; physical Codex acceptance is pending.
+Review baseline: `94af7a7`. The reproduced cancellation defect below is repaired in `800d609`. This is a development audit, not release approval. Actual repeated Codex typing and reported jitter remain unresolved. The signed v0.2.23 build containing the cancellation repair is installed. A new physical Codex trial reached an acknowledged mutation without confirming delivery; it remains guarded and Off. The selected-text-first v0.2.24 repair is built and signed separately, with native delivery still unqualified.
 
 ## Where the work is
 
@@ -20,9 +20,11 @@ A production-handler reproduction created a completed `cat` stroke, buffered the
 
 The actual Codex trial reached recognition and an AX-acknowledged `valueAndCaret` mutation, but neither expected content nor caret was confirmed. This proves an unconfirmed mutation, not a harmless no-op or successful delivery. It also disproves the claim that the only problem is a missing shortcut or a multiline restriction.
 
-`replaceSelectedText()` prefers replacing the complete `AXValue` whenever value/range setters are advertised, even if selected-text replacement is available. Settable metadata is not a behavioral guarantee. Whole-field replacement has a larger effect than inserting a word and needs qualification for rich editors and framework-controlled inputs. The alternative selected-text and experimental keyboard paths are not established fixes for Codex.
+The installed v0.2.23 `replaceSelectedText()` prefers replacing the complete `AXValue` whenever value/range setters are advertised, even if selected-text replacement is available. Settable metadata is not a behavioral guarantee. Whole-field replacement has a larger effect than inserting a word and needs qualification for rich editors and framework-controlled inputs. The alternative selected-text and experimental keyboard paths are not established fixes for Codex.
 
-**Smallest next step:** test one chosen transport on an owned blank unsent composer, verify exact text/caret after each word, and choose the transport before any mutation. Never try a second transport after an uncertain write. Retain original app/field/range/protection checks. See [App.swift](../Sources/Swipepad/App.swift), `replaceSelectedText`, `settleDeferredCaret`, and `confirmOwnCaret`.
+**Source repair staged:** v0.2.24 prefers `AXSelectedText` when available, limiting mutation to the current selection. Whole-value/caret fallback is chosen only when selected-text is unavailable. It keeps exact identity/range/content checks and records uncertainty before mutation. New regressions cover an acknowledged no-op and a mutation followed by error; neither retries through the other backend. Native delivery is not proven. A selected-text provider that leaves the old caret or trims the separator can still stall safely.
+
+**Smallest next step:** account explicitly for the latest uncertain write, then test the preselected narrower transport with one word in an owned blank unsent composer, followed by exact text/caret confirmation. Never try a second transport after an uncertain write. Retain original app/field/range/protection checks. See [App.swift](../Sources/Swipepad/App.swift), `replaceSelectedText`, `settleDeferredCaret`, and `confirmOwnCaret`.
 
 ### 3. The latency-critical work shares one main run loop — high priority, source-proven architecture
 
@@ -72,7 +74,7 @@ The bridge dereferences an opaque private device handle to obtain an integer ID 
 |---|---:|---|
 | Core checks | 282 pass | Pure geometry, policies, hotkey and generated contact logic |
 | Offscreen mapping/transport checks | 177 pass | Production mapping/render-state helpers and synthetic event decisions; no live tap or AX delivery |
-| Production handler regressions after repair | 263 pass | Memory-only target ports, cancellation, exact-once attempts and delayed continuation |
+| Production handler regressions after both source repairs | 267 pass | Memory-only target ports, cancellation, exact-once attempts and delayed continuation |
 | Synthetic stress | 16,000 cases, 2,000 words | Generated geometry robustness; no hardware or human accuracy |
 | Synthetic lexical validation | 1,200 cases | 1,132 correct commits, 6 wrong commits, 62 refusals |
 | Unknown-word cases | 14 of 60 falsely accepted | The acceptance rule cannot reliably reject out-of-vocabulary gestures |
@@ -98,4 +100,4 @@ Remove unused legacy helpers only after checking callers: old corner-redirection
 4. Observe real callback states, lifts, recognition, write attempts, confirmations, filter failures and timing. Check pointer/window stability and visible status, then Escape and double-Command exits with ordinary pointer/click behavior restored. Boundary sampling alone cannot exclude brief or internal editor jitter.
 5. Qualify ordinary native single-line/search/multiline and a browser input separately. Include rejection of secure/read-only fields, field/caret changes, duplicate terminal frames, mixed lift/new-contact, sleep/wake and uncertain mutations. Stop at the first unexpected write and preserve its record.
 
-The user approved retiring the old uncertain record without replay, and v0.2.23 now passes live signature, sole-instance, existing-trust and clean-Off checks. Its counters-only IPC also responds correctly. The actual finger-swipe trial still needs the participant at an owned blank unsent composer. No permissions were changed or text submitted. The small cancellation fix can be reviewed independently, but the consolidated draft is not ready to merge as a working typing release.
+The user approved retiring the old uncertain record without replay, and v0.2.23 now passes live signature, sole-instance, existing-trust and clean-Off checks. Its counters-only IPC also responds correctly. That participant trial now has actual callback evidence, but failed delivery confirmation. One newly acknowledged uncertain mutation is still retained in the original v0.2.23 process, which is Off. The earlier approved abandonment does not cover this new record. The separately staged v0.2.24 candidate needs explicit handling of that record before replacing the current instance, followed by native/physical qualification. No permissions were changed or text submitted. The small cancellation fix can be reviewed independently, but the consolidated draft is not ready to merge as a working typing release.

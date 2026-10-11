@@ -744,7 +744,10 @@ final class GuidePanel: NSPanel {
     let valueBackend=attributeWritable(field,kAXValueAttribute) && attributeWritable(field,kAXSelectedTextRangeAttribute)
     let directBackend=attributeWritable(field,kAXSelectedTextAttribute)
     let keyboardBackend = insertionTransport == .keyboard
-    let useValueBackend=valueBackend
+    // Prefer the focused selection's insertion API. Replacing the complete AXValue
+    // can bypass a controlled editor's input handling and write its accessible
+    // representation back as document text. Choose once; never switch after mutation.
+    let useValueBackend=valueBackend && !directBackend
     guard (keyboardBackend ? CGPreflightPostEventAccess() : (valueBackend || directBackend)),identity(field,pid:pid),let checked=selection(field),checked.location==range.location,checked.length==range.length,
       attribute(field,kAXValueAttribute) as? String==before else {return .cannotComplete}
     // Allocate before recording a transaction; never retry AX after posting an event.
@@ -767,8 +770,8 @@ final class GuidePanel: NSPanel {
       // Posting has no delivery receipt. Existing exact content/caret polling is mandatory.
       result = .success
     } else if useValueBackend {
-      // Capability-selected before mutation. Some providers acknowledge selected-text
-      // setters without editing; never use success alone or retry an uncertain write.
+      // Used only when selected-text insertion is unavailable. Setter success is
+      // still not delivery evidence; never retry through another backend.
       result=setAttribute(field,kAXValueAttribute,expected as CFString)
     } else {
       result=setAttribute(field,kAXSelectedTextAttribute,inserted as CFString)

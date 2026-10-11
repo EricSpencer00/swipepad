@@ -26,6 +26,8 @@ final class MemoryInput:AppDelegate {
   var trimSeparator=false
   var delayedValuePublication=false
   var rejectCaretSetter=false
+  var acknowledgeSelectedTextWithoutEditing=false
+  var selectedTextMutationError:AXError = .success
   var staleValueOnce:String?
   var loseRangeOnceAfterSelection=false
   var rangeUnavailableOnce=false
@@ -49,6 +51,7 @@ final class MemoryInput:AppDelegate {
   override func setAttribute(_ field:AXUIElement,_ name:String,_ input:CFTypeRef)->AXError {
     guard CFEqual(field,ownedField),editable else {return .cannotComplete}
     attributeNamesSet.append(name)
+    if name==kAXSelectedTextAttribute,acknowledgeSelectedTextWithoutEditing {return .success}
     if name==kAXSelectedTextAttribute,let text=input as? String,
       let expected=TextReplacement.replacing(value,location:caret.location,length:caret.length,with:text) {
       attemptedWords.append(text);value=expected
@@ -59,7 +62,7 @@ final class MemoryInput:AppDelegate {
       var range=CFRange();guard AXValueGetValue(unsafeDowncast(input,to:AXValue.self),.cfRange,&range) else {return .illegalArgument}
       if delayFirst {delayFirst=false} else {caret=range;if range.length>0 && loseRangeOnceAfterSelection {rangeUnavailableOnce=true}}
     } else {return .attributeUnsupported}
-    return .success
+    return name==kAXSelectedTextAttribute ? selectedTextMutationError:.success
   }
   func activate() {
     liftGraceSeconds=0 // Legacy immediate-handler cases; explicit grace cases below exercise the timer.
@@ -117,7 +120,18 @@ let directOnly=MemoryInput();directOnly.activate();directOnly.valueWritable=fals
 word(directOnly,"cat");word(directOnly,"world")
 check(directOnly.value=="cat world " && directOnly.attributeNamesSet==[kAXSelectedTextAttribute,kAXSelectedTextAttribute],"selected-text-only provider still repeats without whole-value capability")
 let preferred=MemoryInput();preferred.activate();word(preferred,"cat");word(preferred,"world")
-check(preferred.attributeNamesSet==[kAXValueAttribute,kAXSelectedTextRangeAttribute,kAXValueAttribute,kAXSelectedTextRangeAttribute],"production writer selects verified value/caret when both AX backends exist")
+check(preferred.attributeNamesSet==[kAXSelectedTextAttribute,kAXSelectedTextAttribute],"production writer prefers selection insertion when both AX backends exist")
+let selectedNoOp=MemoryInput();selectedNoOp.activate();selectedNoOp.acknowledgeSelectedTextWithoutEditing=true
+word(selectedNoOp,"cat");word(selectedNoOp,"world")
+RunLoop.current.run(until:Date().addingTimeInterval(0.30))
+check(selectedNoOp.value.isEmpty && selectedNoOp.captureDiagnostics.insertions==0 && selectedNoOp.unresolvedWrites.count==1,"selected-text acknowledgement without content/caret change remains unresolved")
+check(selectedNoOp.attributeNamesSet==[kAXSelectedTextAttribute] && selectedNoOp.captureDiagnostics.writeAttempts==1,"no-op selected-text write never falls back to whole-value or retries text")
+selectedNoOp.cancel("OFF")
+let selectedErrorAfterMutation=MemoryInput();selectedErrorAfterMutation.activate();selectedErrorAfterMutation.selectedTextMutationError = .cannotComplete
+word(selectedErrorAfterMutation,"cat")
+check(selectedErrorAfterMutation.value=="cat " && selectedErrorAfterMutation.captureDiagnostics.insertions==1 && selectedErrorAfterMutation.unresolvedWrites.isEmpty,"selected-text error after exact observed mutation resolves without retry")
+check(selectedErrorAfterMutation.attributeNamesSet==[kAXSelectedTextAttribute],"accepted selected-text mutation followed by error never triggers alternate backend")
+selectedErrorAfterMutation.cancel("OFF")
 let delayed=MemoryInput();delayed.activate();delayed.delayFirst=true
 let a=points("cat"),b=points("world")
 for (i,p) in a.enumerated() {frame(delayed,[(1,p,i==0 ? .starting:.touching)])}
@@ -222,7 +236,7 @@ check(!protection.active && !protection.inputProtectionHealthy && protection.cap
 word(protection,"world")
 check(protection.value=="cat " && protection.captureDiagnostics.writeAttempts==1 && protection.unresolvedWrites.first?.id==uncertainty,"protection failure cannot write, discard uncertainty or pass new contact into insertion")
 check(!protection.validTarget() && !protection.insertWord("world",alternatives:["world"]),"protection failure cannot resume delivery without explicit activation")
-let normalized=MemoryInput();normalized.activate();normalized.normalizeSeparator=true
+let normalized=MemoryInput();normalized.activate();normalized.selectedTextWritable=false;normalized.normalizeSeparator=true
 word(normalized,"cat");word(normalized,"world");word(normalized,"auto")
 check(normalized.value=="cat\u{00a0}world\u{00a0}auto\u{00a0}" && normalized.captureDiagnostics.insertions==3 && normalized.unresolvedWrites.isEmpty,"exact new-separator NBSP receipt confirms repeated words and rebases exact bytes")
 let changedReceipt=MemoryInput();changedReceipt.activate();changedReceipt.delayFirst=true;word(changedReceipt,"cat");let receipt=changedReceipt.unresolvedWrites.first!
@@ -230,7 +244,7 @@ changedReceipt.value="bat\u{00a0}";changedReceipt.caret=CFRange(location:4,lengt
 check(!changedReceipt.permitsResolvedWrite(changedReceipt.ownedField,pid:40001,range:changedReceipt.caret,resolvePending:true),"separator alternate never accepts changed letter outside newly generated separator")
 changedReceipt.value="cat\u{00a0}";changedReceipt.caret=CFRange(location:3,length:0)
 check(!changedReceipt.permitsResolvedWrite(changedReceipt.ownedField,pid:40001,range:changedReceipt.caret,resolvePending:true),"separator alternate still requires exact collapsed UTF16 caret")
-let trimmed=MemoryInput();trimmed.activate();trimmed.trimSeparator=true
+let trimmed=MemoryInput();trimmed.activate();trimmed.selectedTextWritable=false;trimmed.trimSeparator=true
 for _ in 0..<3 {for w in ["cat","world","auto"] {word(trimmed,w)}}
 check(trimmed.value==String(repeating:"cat world auto ",count:3).trimmingCharacters(in:.whitespaces) && trimmed.captureDiagnostics.insertions==9 && trimmed.unresolvedWrites.isEmpty,"AX-trimmed generated terminal separator uses leading next-word separation with exact receipt and caret")
 check(trimmed.continuationAnchor?.trimmedSeparator==true && trimmed.caret.location==trimmed.value.utf16.count,"trim receipt anchors exact observed caret and bytes")
@@ -263,16 +277,16 @@ let priorAttributeCount=uncertainCorrection.attributeNamesSet.count;uncertainCor
 check(uncertainCorrection.attributeNamesSet.count==priorAttributeCount && uncertainCorrection.caret.length==0 && uncertainCorrection.unresolvedWrites.first?.id==heldTransaction,"unresolved prior mutation rejects correction before selecting or writing old word")
 let utf=MemoryInput();utf.activate();utf.value="😀";utf.caret=CFRange(location:2,length:0);word(utf,"cat");word(utf,"world")
 check(utf.value=="😀cat world " && utf.caret.location==12,"repeated insertion rebases UTF16 caret after surrogate pair")
-let delayedValue=MemoryInput();delayedValue.activate();delayedValue.trimSeparator=true;delayedValue.delayedValuePublication=true
+let delayedValue=MemoryInput();delayedValue.activate();delayedValue.selectedTextWritable=false;delayedValue.trimSeparator=true;delayedValue.delayedValuePublication=true
 for _ in 0..<3 {for w in ["cat","world","auto"] {word(delayedValue,w);RunLoop.current.run(until:Date().addingTimeInterval(0.08))}}
 check(delayedValue.value==String(repeating:"cat world auto ",count:3).trimmingCharacters(in:.whitespaces) && delayedValue.captureDiagnostics.insertions==9 && delayedValue.unresolvedWrites.isEmpty,"delayed AXValue publication settles exact trimmed receipt before one caret attempt per word")
 check(delayedValue.attributeNamesSet.filter {$0==kAXValueAttribute}.count==9 && delayedValue.attributeNamesSet.filter {$0==kAXSelectedTextRangeAttribute}.count==9,"delayed publication never retries text or caret mutations")
-let movedWhilePublishing=MemoryInput();movedWhilePublishing.activate();movedWhilePublishing.delayedValuePublication=true
+let movedWhilePublishing=MemoryInput();movedWhilePublishing.activate();movedWhilePublishing.selectedTextWritable=false;movedWhilePublishing.delayedValuePublication=true
 _ = movedWhilePublishing.replaceSelectedText(movedWhilePublishing.ownedField,pid:40001,range:movedWhilePublishing.caret,inserted:"cat ")
 let deferredID=movedWhilePublishing.unresolvedWrites.first!.id;movedWhilePublishing.caret=CFRange(location:1,length:0)
 _ = movedWhilePublishing.settleDeferredCaret(deferredID)
 check(movedWhilePublishing.attributeNamesSet==[kAXValueAttribute] && movedWhilePublishing.unresolvedWrites.count==1,"manual caret change blocks deferred caret placement and retains accepted write without replay")
-let caretRejected=MemoryInput();caretRejected.activate();caretRejected.rejectCaretSetter=true
+let caretRejected=MemoryInput();caretRejected.activate();caretRejected.selectedTextWritable=false;caretRejected.rejectCaretSetter=true
 _ = caretRejected.replaceSelectedText(caretRejected.ownedField,pid:40001,range:caretRejected.caret,inserted:"cat ")
 let rejectedID=caretRejected.unresolvedWrites.first!.id
 for _ in 0..<3 {_ = caretRejected.settleDeferredCaret(rejectedID)}
