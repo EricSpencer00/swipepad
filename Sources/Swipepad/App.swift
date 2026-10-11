@@ -496,7 +496,7 @@ final class GuidePanel: NSPanel {
         let contact=GraceContact(id:touch.identifier,point:Point(Double(touch.posX),Double(touch.posY)),time:event.timestamp,state:touch.state)
         if handleGraceContact(contact) {return}
       } else if let release=deferredLift,release.candidate != nil {
-        commitDeferredLift();guard active else {return}
+        guard commitDeferredLift() else {return}
         for candidate in release.candidateSamples {consumeContact(candidate)}
       } else {return} // Empty/linger frames never extend the release deadline.
     }
@@ -523,6 +523,7 @@ final class GuidePanel: NSPanel {
     consumeContact(GraceContact(id:touch.identifier,point:Point(Double(touch.posX),Double(touch.posY)),time:event.timestamp,state:touch.state))
   }
   func consumeContact(_ touch:GraceContact) {
+    guard active,!waitForLift else {return}
     if finger==nil {
       lastOwnedWord=nil;buttons.forEach {$0.isHidden=true}
       strokeFreshContact=contactGate.observedLift || touch.state == .starting || touch.state == .making
@@ -545,15 +546,20 @@ final class GuidePanel: NSPanel {
     DispatchQueue.main.asyncAfter(deadline:.now()+liftGraceSeconds) {[weak self] in
       guard let self,self.active,self.liftTimerGeneration==generation else {return}
       let candidates=self.deferredLift?.candidateSamples ?? []
-      self.commitDeferredLift()
-      if self.active {for candidate in candidates {self.consumeContact(candidate)}}
+      guard self.commitDeferredLift() else {return}
+      for candidate in candidates {self.consumeContact(candidate)}
     }
   }
-  func commitDeferredLift() {
-    guard let release=deferredLift,release.token==strokeToken else {return}
+  @discardableResult func commitDeferredLift() -> Bool {
+    guard let release=deferredLift,release.token==strokeToken else {return false}
+    let cancellation=strokeCancellationGeneration
     deferredLift=nil;liftTimerGeneration += 1;captureDiagnostics.graceCommits += 1
     finishStroke()
-    if active {waitForLift=false} // The deferred release already proved the old contact lifted.
+    // A cancellation retires buffered contacts too. It cannot authorize their
+    // replay against the new field/caret or clear a held-contact lift gate.
+    guard active,strokeCancellationGeneration==cancellation else {return false}
+    waitForLift=false // The deferred release already proved the old contact lifted.
+    return true
   }
   /// Returns true when the frame is owned by a tentative or accepted bounce.
   func handleGraceContact(_ contact:GraceContact)->Bool {
@@ -561,14 +567,18 @@ final class GuidePanel: NSPanel {
     let now=ProcessInfo.processInfo.systemUptime
     let elapsed=(release.candidateHostTime ?? now)-release.hostTime
     guard LiftGrace.nearby(strokeSamples,point:release.candidate?.point ?? contact.point,elapsed:elapsed,idChanged:contact.id != release.id,bounces:bounceCount,missing:missingSeconds,grace:liftGraceSeconds) else {
-      commitDeferredLift()
-      if active {for point in release.candidateSamples {consumeContact(point)}}
-      return !active
+      guard commitDeferredLift() else {return true}
+      for point in release.candidateSamples {consumeContact(point)}
+      return false
     }
     guard let first=release.candidate else {release.candidate=contact;release.candidateHostTime=now;release.candidateSamples=[contact];deferredLift=release;return true}
     guard first.id==contact.id else {deferredLift=nil;liftTimerGeneration += 1;resetStrokeForRetry("Contact changed · lift, then retry");return true}
     guard let continuation=LiftGrace.directionContinues(strokeSamples,first:first.point,next:contact.point) else {release.candidateSamples.append(contact);deferredLift=release;return true}
-    guard continuation else {commitDeferredLift();if active {for point in release.candidateSamples {consumeContact(point)}};return !active}
+    guard continuation else {
+      guard commitDeferredLift() else {return true}
+      for point in release.candidateSamples {consumeContact(point)}
+      return false
+    }
     deferredLift=nil;liftTimerGeneration += 1;bounceCount += 1;missingSeconds += elapsed
     finger=contact.id;waitForLift=false;captureDiagnostics.graceRejoins += 1
     if first.state == .making || first.state == .touching || contact.state == .making || contact.state == .touching {strokeActualContact=true;touchSeen=true}

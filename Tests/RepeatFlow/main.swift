@@ -33,6 +33,8 @@ final class MemoryInput:AppDelegate {
   var attemptedWords:[String]=[]
   var acquireCount=0
   var metadataReads=0
+  var beforeTargetValidation:(()->Void)?
+  override func validTarget()->Bool {beforeTargetValidation?();return super.validTarget()}
   override var currentApplicationPID:pid_t? {pid}
   override func focused(_ pid:pid_t)->AXUIElement? {metadataReads += 1;return missingFocus ? nil:(chosenField ?? ownedField)}
   override func attribute(_ field:AXUIElement,_ name:String)->CFTypeRef? {
@@ -377,3 +379,57 @@ observing=false
 check(!scrollObserver.handlePointer(.scrollWheel,button:0) && passedScrolls==1,"Off scroll events remain unchanged and uncounted")
 check(delayedFrame.captureDiagnostics.totalAXMilliseconds>=delayedFrame.captureDiagnostics.maximumAXMilliseconds,"total measured AX time can expose accumulated work")
 print("PASS all instrumentation and safe-failure checks; total",checks)
+
+// Contacts observed before cancellation must not reacquire a changed caret.
+let graceCancelled=MemoryInput();graceCancelled.activate();graceCancelled.liftGraceSeconds=0.12
+word(graceCancelled,"cat",id:1)
+let bufferedNext=points("test")
+frame(graceCancelled,[(2,bufferedNext[0],.making)])
+check(graceCancelled.deferredLift?.candidateSamples.count==1,"nearby next contact is buffered during release grace")
+graceCancelled.value="X";graceCancelled.caret=CFRange(location:1,length:0)
+RunLoop.current.run(until:Date().addingTimeInterval(0.16))
+check(graceCancelled.finger==nil && graceCancelled.target==nil && graceCancelled.waitForLift,"caret cancellation retires buffered contact and retains held-contact lift gate")
+for point in bufferedNext.dropFirst() {frame(graceCancelled,[(2,point,.touching)])}
+frame(graceCancelled,[(2,bufferedNext.last!,.breaking)])
+RunLoop.current.run(until:Date().addingTimeInterval(0.16))
+check(graceCancelled.value=="X" && graceCancelled.captureDiagnostics.writeAttempts==0,"old buffered contact cannot write at a new caret after cancellation")
+word(graceCancelled,"test",id:3)
+RunLoop.current.run(until:Date().addingTimeInterval(0.16))
+check(graceCancelled.value=="Xtest " && graceCancelled.captureDiagnostics.writeAttempts==1,"a genuinely fresh post-lift contact can use the new caret once")
+graceCancelled.cancel("OFF")
+print("PASS buffered-contact cancellation regressions; total",checks)
+
+for route in ["proximity","direction","emptyFrame"] {
+  let owner=MemoryInput();owner.activate();owner.liftGraceSeconds=0.12
+  word(owner,"cat",id:1);frame(owner,[(2,bufferedNext[0],.making)])
+  var validations=0
+  owner.beforeTargetValidation={
+    validations += 1
+    // Model a target change between the frame guard and terminal write guard.
+    if validations==2 {owner.value="X";owner.caret=CFRange(location:1,length:0)}
+  }
+  if route=="proximity" {
+    RunLoop.current.run(until:Date().addingTimeInterval(0.08))
+    // The original candidate is close, but changing its ID plus a small
+    // reach limit can fail proximity; use the expired missing-time budget.
+    owner.missingSeconds=0.30
+    frame(owner,[(2,bufferedNext[1],.touching)])
+  } else if route=="direction" {
+    frame(owner,[(2,Point(bufferedNext[0].x-0.04,bufferedNext[0].y),.touching)])
+  } else {frame(owner,[])}
+  owner.beforeTargetValidation=nil
+  check(validations>=2 && owner.finger==nil && owner.target==nil && owner.captureDiagnostics.writeAttempts==0,"\(route) flush cannot replay buffered contact after terminal target rejection")
+  owner.cancel("OFF")
+}
+
+let bufferedPending=MemoryInput();bufferedPending.activate();bufferedPending.liftGraceSeconds=0.12;bufferedPending.delayFirst=true
+word(bufferedPending,"cat",id:1);frame(bufferedPending,[(2,bufferedNext[0],.making)])
+for point in bufferedNext.dropFirst() {frame(bufferedPending,[(2,point,.touching)])}
+frame(bufferedPending,[(2,bufferedNext.last!,.breaking)])
+RunLoop.current.run(until:Date().addingTimeInterval(0.16))
+check(bufferedPending.pending && bufferedPending.queuedWords.count==1 && bufferedPending.captureDiagnostics.writeAttempts==1,"legitimate buffered next word is retained while prior accepted write awaits its caret")
+bufferedPending.caret=CFRange(location:4,length:0)
+RunLoop.current.run(until:Date().addingTimeInterval(0.14))
+check(bufferedPending.value=="cat test " && bufferedPending.captureDiagnostics.writeAttempts==2 && bufferedPending.unresolvedWrites.isEmpty,"confirmed prior write drains the legitimate buffered word exactly once")
+bufferedPending.cancel("OFF")
+print("PASS all deferred replay paths and pending continuation; total",checks)
