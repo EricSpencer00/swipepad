@@ -58,5 +58,14 @@ import SwipepadCore
     editing.cacheDisplay(in:editing.bounds,to:bitmap)
     if let data=bitmap.representation(using:.png,properties:[:]) {try data.write(to:folder.appendingPathComponent("layout-crop-edit.png"))}
   }
+  // A close call: the top strip offers three words; nothing is typed until one is tapped.
+  let choosing=OverlayKeyboardView(frame:NSRect(x:0,y:0,width:960,height:365))
+  choosing.choices=["hello","hallo","hells"]
+  let choosingWindow=NSWindow(contentRect:choosing.frame,styleMask:[],backing:.buffered,defer:false)
+  choosingWindow.contentView=choosing;choosingWindow.displayIfNeeded();choosing.display()
+  if let bitmap=choosing.bitmapImageRepForCachingDisplay(in:choosing.bounds) {
+    choosing.cacheDisplay(in:choosing.bounds,to:bitmap)
+    if let data=bitmap.representation(using:.png,properties:[:]) {try data.write(to:folder.appendingPathComponent("overlay-choices.png"))}
+  }
   try "Offscreen actual SetupView and OverlayKeyboardView renders. Permission states and hello stroke are illustrative fixtures. No window shown, permission requested, physical touch tested, or text inserted.\n".write(to: folder.appendingPathComponent("EVIDENCE.txt"), atomically: true, encoding: .utf8)
 }

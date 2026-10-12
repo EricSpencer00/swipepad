@@ -594,14 +594,14 @@ let zigzag = (0..<12).map { Point(Double($0 % 2) * 0.9 + 0.05, Double($0) / 12) 
 _ = rankedWords(keyboardStroke(zigzag)) // must return without trapping on a scribble
 check(true, "customer: zig-zag scribble does not crash the recognizer")
 print("Passed \(count) checks including customer scenarios.")
-// Slow measurements (real lexicon, tuning split). Run with SWIPE_TUNE=1; they print but do not gate.
-if ProcessInfo.processInfo.environment["SWIPE_TUNE"] != nil {
-// Benchmark on the real lexicon (not the small test list): common words, realistic wobble and starts.
 let commonWords = ["the", "and", "that", "have", "for", "not", "with", "you", "this", "but", "from", "they",
   "say", "her", "she", "will", "one", "all", "would", "there", "their", "what", "about", "which", "when",
   "make", "like", "time", "just", "know", "people", "into", "year", "good", "some", "could", "them",
   "other", "than", "then", "look", "only", "come", "over", "think", "also", "back", "after", "work",
   "first", "well", "even", "want", "because", "these", "give", "most", "keyboard", "trackpad", "swipe"]
+// Slow measurements (real lexicon, tuning split). Run with SWIPE_TUNE=1; they print but do not gate.
+if ProcessInfo.processInfo.environment["SWIPE_TUNE"] != nil {
+// Benchmark on the real lexicon (not the small test list): common words, realistic wobble and starts.
 let fullLexicon = GestureLexicon(words: WordVocabulary.words)
 var benchTop1 = 0, benchTop3 = 0
 for word in commonWords {
@@ -710,3 +710,48 @@ do {
   }
 }
 print("Passed \(count) checks including pad areas.")
+// Confidence measurement (gated): margin between the best and second-best candidate, split by whether the best was right.
+if ProcessInfo.processInfo.environment["SWIPE_MARGIN"] != nil {
+  let marginWords = Array(Set(commonWords + ["because", "before", "great", "little", "right", "tell", "change", "start", "might", "home", "water", "house", "world", "school", "answer", "number", "music", "letter", "river", "pizza", "tower", "power", "quiet", "green", "listen", "silent", "apple", "thanks", "bottom", "zebra", "quick", "brown", "jump", "fox", "hello", "typing"])).sorted().filter { $0.count >= 3 }
+  let marginLexicon = GestureLexicon(words: WordVocabulary.words)
+  var rightMargins: [Double] = [], wrongMargins: [Double] = []
+  for word in marginWords {
+    let path = Keyboard.path(word)
+    var streams: [[Point]] = [path, jittered(path, amount: 0.01, seed: 5)]
+    if let f = word.first, let n = neighbour(of: f, dx: 0.2) ?? neighbour(of: f, dx: -0.2) {
+      streams.append(jittered(Keyboard.path(String(n) + word.dropFirst()), amount: 0.01, seed: 9))
+    }
+    for s in streams {
+      let ranked = marginLexicon.rank(keyboardStroke(s), limit: 5)
+      guard let best = ranked.first else { continue }
+      let second = ranked.count > 1 ? ranked[1].score : best.score + 1
+      let margin = (second - best.score) / max(abs(best.score), 1e-6)
+      if best.word == word { rightMargins.append(margin) } else { wrongMargins.append(margin) }
+    }
+  }
+  func quantile(_ v: [Double], _ q: Double) -> Double { let s = v.sorted(); return s.isEmpty ? .nan : s[min(s.count - 1, Int(q * Double(s.count)))] }
+  print(String(format: "MARGIN right n=%d p10=%.4f p50=%.4f", rightMargins.count, quantile(rightMargins, 0.1), quantile(rightMargins, 0.5)))
+  print(String(format: "MARGIN wrong n=%d p50=%.4f p90=%.4f", wrongMargins.count, quantile(wrongMargins, 0.5), quantile(wrongMargins, 0.9)))
+  for t in [0.25, 0.5, 1.0, 2.0] {
+    print(String(format: "MARGIN T=%.2f: wrong held back %d/%d, right held back %d/%d", t, wrongMargins.filter { $0 < t }.count, wrongMargins.count, rightMargins.filter { $0 < t }.count, rightMargins.count))
+  }
+  let threshold = quantile(rightMargins, 0.1)
+  let wrongBelow = wrongMargins.filter { $0 < threshold }.count
+  print(String(format: "MARGIN threshold(p10 of right)=%.4f: wrong below=%d/%d, right below=%d/%d", threshold, wrongBelow, wrongMargins.count, rightMargins.filter { $0 < threshold }.count, rightMargins.count))
+}
+
+// MARK: Candidate choice (red first): commit a clear winner; offer up to three when the top two are close.
+do {
+  check(CandidateChoice.decide([]) == .none, "no candidates means nothing is typed")
+  check(CandidateChoice.decide([GestureCandidate(word: "hello", score: 0.5, geometryScore: 0.5)]) == .commit("hello"), "a lone candidate is committed")
+  let clear = [GestureCandidate(word: "hello", score: 1.0, geometryScore: 1.0), GestureCandidate(word: "hallo", score: 3.0, geometryScore: 3.0)]
+  check(CandidateChoice.decide(clear) == .commit("hello"), "a clear winner is typed without asking")
+  let close = (0..<4).map { GestureCandidate(word: ["hello", "hallo", "hells", "help"][$0], score: 1.0 + Double($0) * 0.1, geometryScore: 1.0) }
+  check(CandidateChoice.decide(close) == .choose(["hello", "hallo", "hells"]), "a close call offers the top three and types nothing")
+  check(CandidateChoice.choiceIndex(for: Point(0.1, 0.92), count: 3) == 0, "left third of the top strip picks the first choice")
+  check(CandidateChoice.choiceIndex(for: Point(0.5, 0.92), count: 3) == 1, "middle third picks the second choice")
+  check(CandidateChoice.choiceIndex(for: Point(0.9, 0.92), count: 3) == 2, "right third picks the third choice")
+  check(CandidateChoice.choiceIndex(for: Point(0.5, 0.5), count: 3) == nil, "touches below the strip do not pick a choice")
+  check(CandidateChoice.choiceIndex(for: Point(0.5, 0.92), count: 0) == nil, "no choices means nothing to pick")
+}
+print("Passed \(count) checks including candidate choice.")

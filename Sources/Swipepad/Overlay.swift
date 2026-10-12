@@ -9,6 +9,8 @@ import SwipepadCore
   var viewport:KeyboardViewport = .full { didSet {needsDisplay=true} }
   /// Layout preview only: draws the whole keyboard with a crop frame whose edges can be dragged.
   var editable=false
+  /// Words offered after a close call, drawn on the top strip of the pad.
+  var choices:[String]=[] { didSet {needsDisplay=true} }
   private var dragEdge:KeyboardViewport.Edge?
   override func acceptsFirstMouse(for event:NSEvent?) -> Bool {true}
   override func mouseDown(with event:NSEvent) {
@@ -50,6 +52,7 @@ import SwipepadCore
       let size=text.size(withAttributes:attributes)
       text.draw(at:NSPoint(x:rect.midX-size.width/2,y:rect.midY-size.height/2),withAttributes:attributes)
     }
+    if !choices.isEmpty {drawChoiceStrip(solid:solid)}
     if editable {drawCropFrame()}
     if let first=path.first,path.count>1 {
       let line=NSBezierPath();line.move(to:NSPoint(x:first.x*bounds.width,y:first.y*bounds.height))
@@ -72,6 +75,20 @@ import SwipepadCore
       let cursor=NSBezierPath(ovalIn:NSRect(x:center.x-8,y:center.y-8,width:16,height:16));cursor.lineWidth=2;cursor.stroke()
       let cross=NSBezierPath();cross.move(to:NSPoint(x:center.x-12,y:center.y));cross.line(to:NSPoint(x:center.x+12,y:center.y))
       cross.move(to:NSPoint(x:center.x,y:center.y-12));cross.line(to:NSPoint(x:center.x,y:center.y+12));cross.lineWidth=1.5;cross.stroke()
+    }
+  }
+  /// Top strip of the pad: one cell per word, split into equal parts. Tapping a cell picks it.
+  func drawChoiceStrip(solid:Bool) {
+    let top=bounds.height,bottom=bounds.height*CandidateChoice.stripBottom
+    let strip=NSRect(x:0,y:bottom,width:bounds.width,height:top-bottom)
+    NSColor.windowBackgroundColor.withAlphaComponent(solid ? 1 : 0.92).setFill();strip.fill()
+    NSColor.separatorColor.setStroke();NSBezierPath(rect:strip).stroke()
+    let cell=bounds.width/CGFloat(choices.count)
+    for (i,word) in choices.enumerated() {
+      let attributes:[NSAttributedString.Key:Any]=[.font:NSFont.systemFont(ofSize:min(24,max(15,bounds.width*0.03)),weight:.semibold),.foregroundColor:NSColor.labelColor]
+      let text=word as NSString,size=text.size(withAttributes:attributes)
+      if i > 0 {NSColor.separatorColor.setStroke();let divider=NSBezierPath();divider.move(to:NSPoint(x:cell*CGFloat(i),y:bottom));divider.line(to:NSPoint(x:cell*CGFloat(i),y:top));divider.stroke()}
+      text.draw(at:NSPoint(x:cell*CGFloat(i)+cell/2-size.width/2,y:strip.midY-size.height/2),withAttributes:attributes)
     }
   }
   /// Crop frame with grab handles at the middle of each edge.

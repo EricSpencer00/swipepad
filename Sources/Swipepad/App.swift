@@ -27,6 +27,12 @@ final class GuidePanel: NSPanel {
   var strokeCalibration:CalibrationRect?
   var strokeSamples:[StrokeSample]=[]
   var jumpFilter=ContactJumpFilter() // drops roll spikes before they reach the trail or recognition
+  var shownChoices:[String]=[] // a close call: words offered on the top strip, typed only when tapped
+  /// Pad area used as the keyboard (full trackpad unless the iPhone-sized area is chosen).
+  var padRegion:PadRegion { PadRegion(stored:UserDefaults.standard.array(forKey:"padRegion") as? [Double]) }
+  func setChoices(_ words:[String]) {
+    shownChoices=words;keyboard.choices=words;overlayKeyboard.choices=words
+  }
   var strokeSource:InputMode = .trackpad
   var activationScreen:NSScreen?
   var layoutPanel:NSWindow?
@@ -119,6 +125,13 @@ final class GuidePanel: NSPanel {
       item.representedObject=mode.rawValue;item.state=inputMode==mode ? .on : .off
     }
     menu.addItem(withTitle:"On-Screen Guide Layout…",action:#selector(showOverlayLayout),keyEquivalent:"")
+    let areaMenu=NSMenu()
+    for (title,stored) in [("Full Trackpad",false),("iPhone-Sized Area",true)] {
+      let item=areaMenu.addItem(withTitle:title,action:#selector(choosePadArea(_:)),keyEquivalent:"")
+      item.representedObject=stored;item.state=(padRegion == PadRegion.iPhoneSized) == stored ? .on : .off
+    }
+    let areaItem=menu.addItem(withTitle:"Pad Area",action:nil,keyEquivalent:"")
+    areaItem.submenu=areaMenu
     menu.addItem(.separator())
     menu.addItem(withTitle: "Correct Last Word…", action: #selector(showLastCorrection), keyEquivalent: "")
     menu.addItem(withTitle: "Setup…", action: #selector(showSetup), keyEquivalent: "")
@@ -653,7 +666,28 @@ final class GuidePanel: NSPanel {
     guard singleLetter != nil || (path.count>=3 && path.first.map {first in path.contains(where:{first.distance($0)>0.06})} == true) else {
       rejectCompletedStroke("Swipe longer words, or tap A/I");return
     }
-    let candidates=singleLetter.map {[$0]} ?? gestureLexicon.candidates(mapped)
+    // A tap on the top strip picks one of the shown words. Any other stroke discards them.
+    let shown=shownChoices;setChoices([])
+    let isTap=completed.allSatisfy {$0.point.distance(completed[0].point)<0.06}
+    var candidates:[String]=[]
+    if isTap,let index=CandidateChoice.choiceIndex(for:completed[0].point,count:shown.count) {
+      candidates=[shown[index]]+shown.enumerated().filter {$0.offset != index}.map(\.element)
+    } else if let letter=singleLetter {
+      candidates=[letter]
+    } else {
+      let ranked=gestureLexicon.rank(mapped,limit:5)
+      switch CandidateChoice.decide(ranked) {
+      case .commit:
+        candidates=ranked.map(\.word)
+      case .choose(let words):
+        setChoices(words);captureDiagnostics.candidates=words.count
+        prepareNextStroke(preserveTrail:true)
+        label.stringValue="Not sure · tap the word you meant on the top strip"
+        return
+      case .none:
+        candidates=[]
+      }
+    }
     captureDiagnostics.candidates=candidates.count
     guard let top=candidates.first else {
       rejectCompletedStroke("No matching word · swipe again");return
@@ -703,10 +737,13 @@ final class GuidePanel: NSPanel {
   }
   func appendSample(_ point:Point,time:Double,phase:ContactPhase,sourcePoint:Point? = nil) {
     guard strokeSamples.count<4096 else {cancel("Stroke too long; cancelled");return}
-    guard jumpFilter.accept(point,time:time) else {captureDiagnostics.rollSpikes += 1;return}
-    strokeSamples.append(StrokeSample(point,time:time,phase:phase,source:strokeSource,sourcePoint:sourcePoint))
+    let raw=sourcePoint ?? point
+    guard padRegion.contains(point) else {return} // contacts outside the chosen pad area are ignored
+    let inArea=padRegion.toRegion(point)
+    guard jumpFilter.accept(inArea,time:time) else {captureDiagnostics.rollSpikes += 1;return}
+    strokeSamples.append(StrokeSample(inArea,time:time,phase:phase,source:strokeSource,sourcePoint:raw))
     captureDiagnostics.samples=strokeSamples.count
-    path.append(point) // Identical contacts and recognition for both guide presentations.
+    path.append(inArea) // Identical contacts and recognition for both guide presentations.
   }
   func renderStroke() {
     keyboard.path=path;keyboard.needsDisplay=true
@@ -1010,6 +1047,11 @@ final class GuidePanel: NSPanel {
     // Ordinary refusals/cancellation never open a window or require dismissal.
     updateModeIndicator()
   }
+  @objc func choosePadArea(_ item:NSMenuItem) {
+    guard !active,let iPhone=item.representedObject as? Bool else {return}
+    UserDefaults.standard.set(iPhone ? PadRegion.iPhoneSized.stored : PadRegion.full.stored,forKey:"padRegion")
+    for candidate in item.menu?.items ?? [] {candidate.state=(candidate.representedObject as? Bool)==iPhone ? .on : .off}
+  }
   @objc func showLastCorrection() {
     guard !active else {return}
     guard !active,let owned=lastOwnedWord,identity(owned.field,pid:owned.pid),
@@ -1024,6 +1066,7 @@ final class GuidePanel: NSPanel {
 
   func cancel(_ reason: String) {
     abandonActivation()
+    setChoices([])
     deferredLift=nil;liftTimerGeneration += 1
     if active && reason != "OFF" && reason != "Quit" {
       let category:String
