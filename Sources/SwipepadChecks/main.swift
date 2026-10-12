@@ -467,3 +467,15 @@ check(!FocusLookup.isUnpublished(application:FocusLookup.noValue,system:0),"fore
 check(FocusLookup.kind(application:0,system:nil,fieldFound:true)=="found","authoritative owned field classified found")
 check(FocusLookup.kind(application:FocusLookup.cannotComplete,system:nil,fieldFound:false)=="providerNotResponding","provider timeout classified separately")
 print("Passed \(count) core checks with authoritative focus classifications.")
+
+let ownedSpace=WordReceipts.values(before:"cat\u{00a0}",location:4,length:0,inserted:"world ",previousOwnSeparator:true)!
+check(Set(ownedSpace.all)==Set(["cat\u{00a0}world ","cat\u{00a0}world\u{00a0}","cat world ","cat world\u{00a0}"]),"exact four receipts for own adjacent separator and fresh separator")
+let userSpace=WordReceipts.values(before:"cat\u{00a0}",location:4,length:0,inserted:"world ",previousOwnSeparator:false)!
+check(!userSpace.all.contains("cat world\u{00a0}") && userSpace.precedingSpace==nil,"user-entered NBSP cannot be silently normalized")
+let olderSpaces=WordReceipts.values(before:"one\u{00a0}cat\u{00a0}",location:8,length:0,inserted:"world ",previousOwnSeparator:true)!
+check(olderSpaces.combined=="one\u{00a0}cat world\u{00a0}" && !olderSpaces.all.contains("one cat world\u{00a0}"),"older NBSP outside adjacent owned boundary remains protected")
+check(WordReceipts.values(before:"cat\u{00a0}old",location:4,length:3,inserted:"world ",previousOwnSeparator:true)!.precedingSpace==nil,"selected replacement does not authorize preceding-space changes")
+check(WordReceipts.values(before:"cat ",location:4,length:0,inserted:"world ",previousOwnSeparator:true)!.precedingSpace==nil,"ordinary previous space is not normalized into NBSP")
+check(WordReceipts.values(before:"😀cat\u{00a0}",location:6,length:0,inserted:"world ",previousOwnSeparator:true)!.combined=="😀cat world\u{00a0}","separator receipts use exact UTF16 offsets after surrogate pair")
+check(WordReceipts.values(before:"cat",location:4,length:0,inserted:"world ",previousOwnSeparator:true)==nil,"invalid range cannot fabricate any receipt")
+print("Passed \(count) core checks including owned separator reflow.")

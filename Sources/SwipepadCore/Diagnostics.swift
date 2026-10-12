@@ -126,6 +126,12 @@ public struct CaptureDiagnostics: Codable, Sendable {
   public var inputCapabilities:String?
   public var focusRejection:String?
   public var result:String?
+  public var recognitionRankedCount:Int?
+  public var recognitionTopGeometry:Double?
+  public var recognitionMargin:Double?
+  public var recognitionReason:String?
+  public var feedbackCount:Int?
+  public var feedbackKind:String?
   public init() {}
 }
 public enum Doctor {

@@ -58,7 +58,7 @@ final class GuidePanel: NSPanel {
   var finger: Int32?
   var path: [Point] = []
   var pending = false
-  struct UnresolvedWrite {let id:UUID;let field:AXUIElement;let pid:pid_t;let originalRange:CFRange;let beforeDigest:Data?;let expectedCaret:Int;let expectedDigest:Data?;var separatorDigest:Data?=nil;var trimmedSeparator=false;var trimmedDigest:Data?=nil;var deferredCaret=false;var mutationAccepted=false}
+  struct UnresolvedWrite {let id:UUID;let field:AXUIElement;let pid:pid_t;let originalRange:CFRange;let beforeDigest:Data?;let expectedCaret:Int;let expectedDigest:Data?;var separatorDigest:Data?=nil;var trimmedSeparator=false;var trimmedDigest:Data?=nil;var deferredCaret=false;var mutationAccepted=false;var receiptDigests:[Data]=[];var generatedTrailingSeparator=false}
   var unresolvedWrites:[UnresolvedWrite]=[]
   var carriedWriteGuards:[OutstandingWriteReport]=[]
   var writeTrackingReadable=true
@@ -114,6 +114,10 @@ final class GuidePanel: NSPanel {
   struct OwnedWord {let field:AXUIElement,pid:pid_t;let range:CFRange;let alternatives:[String];let fingerprint:Data;var leadingSeparator=false;var trailingSeparator=true}
   var lastOwnedWord:OwnedWord?
   var lastCompletedSamples:[StrokeSample]=[]
+  struct UninsertedSuggestion {let field:AXUIElement,pid:pid_t;let range:CFRange;let digest:Data;let choices:[String]}
+  var lastSuggestion:UninsertedSuggestion?
+  var lastSwipeChoices:[String]=[]
+  var suggestionWriteID:UUID?
   var frameOrdering=FrameOrdering()
   var liftGraceSeconds=LiftGrace.defaultSeconds
   struct GraceContact {let id:Int32,point:Point,time:Double,state:OpenMTState}
@@ -134,6 +138,7 @@ final class GuidePanel: NSPanel {
   var secureInputActive:Bool {IsSecureEventInputEnabled()}
   var runtimeSignatureValid:Bool {checkRuntimeSignature()}
   var canPostText:Bool {CGPreflightPostEventAccess()}
+  var feedbackWindowsEnabled:Bool {true}
   let words = WordVocabulary.words
   lazy var gestureLexicon = GestureLexicon(words:words)
   func validateMenuItem(_ menuItem:NSMenuItem) -> Bool {
@@ -170,6 +175,7 @@ final class GuidePanel: NSPanel {
     menu.addItem(withTitle:"On-Screen Guide Layout…",action:#selector(showOverlayLayout),keyEquivalent:"")
     menu.addItem(.separator())
     menu.addItem(withTitle: "Correct Last Word…", action: #selector(showLastCorrection), keyEquivalent: "")
+    menu.addItem(withTitle:"Last Swipe Suggestions…",action:#selector(showSwipeSuggestions),keyEquivalent:"")
     menu.addItem(withTitle:"Review Unconfirmed Write…",action:#selector(reviewWriteTracking),keyEquivalent:"")
     menu.addItem(withTitle: "Setup…", action: #selector(showSetup), keyEquivalent: "")
     menu.addItem(withTitle: "Quit Swipepad", action: #selector(quit), keyEquivalent: "q")
@@ -449,6 +455,7 @@ final class GuidePanel: NSPanel {
     }
     lastOwnedWord=nil
     statusReason=nil;feedbackPanel?.orderOut(nil);panel?.orderOut(nil);overlayPanel?.orderOut(nil)
+    lastSuggestion=nil;lastSwipeChoices=[]
     let trial=captureDiagnostics.trial+1
     captureDiagnostics=CaptureDiagnostics();captureDiagnostics.trial=trial
     captureDiagnostics.mode=inputMode.rawValue;captureDiagnostics.stage="activating";captureDiagnostics.liftGraceSeconds=liftGraceSeconds
@@ -689,7 +696,7 @@ final class GuidePanel: NSPanel {
   func consumeContact(_ touch:GraceContact) {
     guard active,!waitForLift else {return}
     if finger==nil {
-      lastOwnedWord=nil;buttons.forEach {$0.isHidden=true}
+      lastOwnedWord=nil;lastSuggestion=nil;lastSwipeChoices=[];buttons.forEach {$0.isHidden=true}
       strokeFreshContact=contactGate.observedLift || touch.state == .starting || touch.state == .making
       guard strokeFreshContact else {waitForLift=true;label.stringValue="Lift resting finger, then swipe or tap";return}
       guard acquireTarget() else {waitForLift=true;return}
@@ -760,12 +767,24 @@ final class GuidePanel: NSPanel {
     guard singleLetter != nil || (path.count>=3 && path.first.map {first in path.contains(where:{first.distance($0)>0.06})} == true) else {
       rejectCompletedStroke("Swipe longer words, or tap A/I");return
     }
-    let candidates=singleLetter.map {[$0]} ?? gestureLexicon.candidates(completed)
+    lastCompletedSamples=completed
+    let ranking=singleLetter==nil ? gestureLexicon.rank(completed):[]
+    captureDiagnostics.recognitionRankedCount=ranking.count
+    captureDiagnostics.recognitionTopGeometry=ranking.first?.geometryScore
+    captureDiagnostics.recognitionMargin=ranking.count>1 ? ranking[1].score-ranking[0].score:nil
+    let accepted=singleLetter != nil || StrokeDecoder.accepts(ranking)
+    let reason=ranking.isEmpty ? "emptyRanking":(ranking[0].geometryScore>=StrokeDecoder.maximumAcceptedScore ? "shapeDistance":"candidateMargin")
+    captureDiagnostics.recognitionReason=accepted ? "accepted":reason
+    let choices=singleLetter.map {[$0]} ?? ranking.map(\.word)
+    lastSwipeChoices=choices
+    let candidates=accepted ? choices:[]
     captureDiagnostics.candidates=candidates.count
     guard let top=candidates.first else {
-      rejectCompletedStroke("No matching word · swipe again");return
+      if let target,let range=originalSelection,let digest=originalContentDigest,!choices.isEmpty {lastSuggestion=UninsertedSuggestion(field:target,pid:originalPID,range:range,digest:digest,choices:choices)}
+      rejectCompletedStroke(choices.isEmpty ? "No matching path · swipe across the letter keys again":"Uncertain: "+choices.prefix(3).joined(separator:" / ")+" · not typed. Swipe again, or Escape → Last Swipe Suggestions.");return
     }
-    lastCompletedSamples=completed
+    lastSuggestion=nil
+    showFeedback("Recognized: "+top+" · inserting",kind:"recognized")
     captureDiagnostics.recognizedWords += 1
     if pending || !queuedWords.isEmpty {
       guard let target,queuedWords.count<8 else {rejectCompletedStroke("Waiting for earlier text · queue full");return}
@@ -776,7 +795,7 @@ final class GuidePanel: NSPanel {
     let cancellation=strokeCancellationGeneration
     guard insertWord(top,alternatives:candidates) else {
       if pending,active,strokeCancellationGeneration==cancellation {
-        prepareNextStroke(preserveTrail:true);label.stringValue="Waiting for caret · next words queue safely"
+        prepareNextStroke(preserveTrail:true);showFeedback("Candidate: "+top+" · waiting for field confirmation. Nothing retried; next words queue safely",kind:"writePending")
       }
       return
     }
@@ -786,12 +805,12 @@ final class GuidePanel: NSPanel {
       if i<candidates.count {button.title=candidates[i];button.contentTintColor=i==0 ? .controlAccentColor : .labelColor
         button.setAccessibilityLabel("Correct last word to "+candidates[i]);button.setAccessibilityHelp("Optional replacement of the last owned word. Stop capture, then choose Correct Last Word from the menu.")}
     }
-    label.stringValue="Word typed · swipe next. Double-Command turns typing off"
+    showFeedback("Typed: "+top+" · swipe next",kind:"inserted")
   }
   func rejectCompletedStroke(_ message:String) {
     captureDiagnostics.rejectedWords += 1
     captureDiagnostics.rejectionReasons[message,default:0] += 1
-    prepareNextStroke(preserveTrail:true);label.stringValue=message
+    prepareNextStroke(preserveTrail:true);showFeedback(message,kind:"strokeRejected")
     // Earlier accepted gestures must not wait for a later successful word.
     drainQueuedWords()
   }
@@ -858,7 +877,7 @@ final class GuidePanel: NSPanel {
   }
   func matchesReceipt(_ write:UnresolvedWrite,_ digest:Data?)->Bool {
     guard let digest else {return false}
-    return digest==write.expectedDigest || (write.separatorDigest != nil && digest==write.separatorDigest)
+    return digest==write.expectedDigest || (write.separatorDigest != nil && digest==write.separatorDigest) || write.receiptDigests.contains(digest)
   }
   func permitsResolvedWrite(_ field:AXUIElement,pid:pid_t,range:CFRange,resolvePending:Bool=false)->Bool {
     guard !trackingBlocks(pid) else {return false}
@@ -875,7 +894,7 @@ final class GuidePanel: NSPanel {
     }) else {return false}
     if let last=matching.last {
       // Anchor the exact observed bytes, including a provider-normalized NEW separator.
-      let confirmed=UnresolvedWrite(id:last.id,field:last.field,pid:last.pid,originalRange:last.originalRange,beforeDigest:last.beforeDigest,expectedCaret:last.expectedCaret,expectedDigest:fingerprint(field),trimmedSeparator:last.trimmedSeparator)
+      let confirmed=UnresolvedWrite(id:last.id,field:last.field,pid:last.pid,originalRange:last.originalRange,beforeDigest:last.beforeDigest,expectedCaret:last.expectedCaret,expectedDigest:fingerprint(field),trimmedSeparator:last.trimmedSeparator,generatedTrailingSeparator:last.generatedTrailingSeparator && !last.trimmedSeparator)
       continuationAnchor=confirmed
     }
     let ids=Set(matching.map(\.id));unresolvedWrites.removeAll {ids.contains($0.id)}
@@ -919,10 +938,12 @@ final class GuidePanel: NSPanel {
       events=prepared
     } else {events=nil}
     guard identity(field,pid:pid),let finalRange=selection(field),finalRange.location==range.location,finalRange.length==range.length,fieldText(field)==before else {return .cannotComplete}
-    // Web editing providers may represent ONLY the newly inserted trailing space
-    // as NBSP. Accept that exact alternate full-value receipt, not general normalization.
-    let separatorValue=inserted.hasSuffix(" ") ? TextReplacement.replacing(expected,location:range.location+inserted.utf16.count-1,length:1,with:"\u{00a0}"):nil
-    var write=UnresolvedWrite(id:UUID(),field:field,pid:pid,originalRange:range,beforeDigest:Data(SHA256.hash(data:Data(before.utf8))),expectedCaret:range.location+inserted.utf16.count,expectedDigest:Data(SHA256.hash(data:Data(expected.utf8))),separatorDigest:separatorValue.map {Data(SHA256.hash(data:Data($0.utf8)))},trimmedDigest:(inserted.hasSuffix(" ") && range.location+inserted.utf16.count==expected.utf16.count) ? Data(SHA256.hash(data:Data(expected.dropLast().utf8))):nil,deferredCaret:!keyboardBackend && useValueBackend)
+    // WebKit reflows an OWN trailing NBSP to ordinary space as the next word arrives.
+    // Permit that one boundary only with the exact confirmed previous app/field/caret
+    // and whole-value anchor. No provenance means no preceding-space alternate.
+    let previousOwn=continuationAnchor.map {$0.pid==pid && CFEqual($0.field,field) && $0.expectedCaret==range.location && $0.generatedTrailingSeparator && !$0.trimmedSeparator && $0.expectedDigest==Data(SHA256.hash(data:Data(before.utf8)))} ?? false
+    guard let receipts=WordReceipts.values(before:before,location:range.location,length:range.length,inserted:inserted,previousOwnSeparator:previousOwn) else {return .cannotComplete}
+    var write=UnresolvedWrite(id:UUID(),field:field,pid:pid,originalRange:range,beforeDigest:Data(SHA256.hash(data:Data(before.utf8))),expectedCaret:range.location+inserted.utf16.count,expectedDigest:Data(SHA256.hash(data:Data(expected.utf8))),separatorDigest:receipts.freshNBSP.map {Data(SHA256.hash(data:Data($0.utf8)))},trimmedDigest:(inserted.hasSuffix(" ") && range.location+inserted.utf16.count==expected.utf16.count) ? Data(SHA256.hash(data:Data(expected.dropLast().utf8))):nil,deferredCaret:!keyboardBackend && useValueBackend,receiptDigests:receipts.all.map {Data(SHA256.hash(data:Data($0.utf8)))},generatedTrailingSeparator:inserted.hasSuffix(" "))
     unresolvedWrites.append(write) // BEFORE mutation: even an error may follow accepted AXValue.
     guard persistWriteTracking() else {unresolvedWrites.removeAll {$0.id==write.id};writeTrackingReadable=false;return .cannotComplete}
     captureDiagnostics.writeAttempts += 1
@@ -1055,6 +1076,10 @@ final class GuidePanel: NSPanel {
   }
   @objc func selectCandidate(_ sender:NSButton) {
     guard !active else {return}
+    if lastSuggestion != nil {
+      guard !sender.isHidden else {showFeedback("Suggestion unavailable · choose a visible candidate",kind:"suggestionRefused");return}
+      insertSuggestion(sender.title);return
+    }
     guard runtimeSignatureValid else {stopForChangedBuild();return}
     guard !sender.isHidden else {rejectCorrection("candidateHidden");return}
     guard let owned=lastOwnedWord else {rejectCorrection("ownershipUnavailable");return}
@@ -1092,7 +1117,8 @@ final class GuidePanel: NSPanel {
     let range=transaction.originalRange
     if let digest=fingerprint(owned.field) {lastOwnedWord=OwnedWord(field:owned.field,pid:owned.pid,range:CFRange(location:range.location,length:transaction.expectedCaret-range.location),alternatives:owned.alternatives,fingerprint:digest,leadingSeparator:owned.leadingSeparator,trailingSeparator:owned.trailingSeparator)} else {lastOwnedWord=nil}
     captureDiagnostics.correctionResult="confirmed"
-    label.stringValue=active ? "Last word corrected · swipe next" : "Last word corrected"
+    if suggestionWriteID==transaction.id {suggestionWriteID=nil;showFeedback("Suggestion typed · double-Command to continue",kind:"suggestionInserted")}
+    else {label.stringValue=active ? "Last word corrected · swipe next" : "Last word corrected"}
     if !active {panel?.orderOut(nil)}
     return true
   }
@@ -1126,6 +1152,10 @@ final class GuidePanel: NSPanel {
     // Only an explicit activation refusal calls this. It cannot take focus or
     // intercept a click, and it disappears without requiring dismissal.
     guard !active else {return}
+    showFeedbackHUD(reason)
+  }
+  func showFeedbackHUD(_ reason:String) {
+    guard feedbackWindowsEnabled,NSApp != nil else {return}
     feedbackGeneration += 1
     let generation=feedbackGeneration
     let notice=feedbackPanel ?? GuidePanel(contentRect:NSRect(x:0,y:0,width:420,height:76),styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
@@ -1140,15 +1170,40 @@ final class GuidePanel: NSPanel {
     surface.addSubview(message);notice.contentView=surface;feedbackPanel=notice
     if let screen=NSScreen.main {let frame=screen.visibleFrame;notice.setFrameOrigin(NSPoint(x:frame.midX-210,y:frame.minY+48))}
     notice.orderFrontRegardless()
-    Timer.scheduledTimer(withTimeInterval:2.5,repeats:false) {[weak self] _ in
+    Timer.scheduledTimer(withTimeInterval:4,repeats:false) {[weak self] _ in
       MainActor.assumeIsolated {guard let self,self.feedbackGeneration==generation else {return};self.feedbackPanel?.orderOut(nil)}
     }
   }
-  func showFeedback(_ reason:String) {
+  func showFeedback(_ reason:String,kind:String="status") {
+    captureDiagnostics.feedbackCount=(captureDiagnostics.feedbackCount ?? 0)+1
+    captureDiagnostics.feedbackKind=kind
     statusReason=reason
     if active {label.stringValue=reason} else {feedbackPanel?.orderOut(nil);panel?.orderOut(nil);overlayPanel?.orderOut(nil)}
-    // Ordinary refusals/cancellation never open a window or require dismissal.
+    // Feedback is nonactivating and click-through; it never requires dismissal.
     updateModeIndicator()
+    if NSApp != nil {showFeedbackHUD(reason)}
+  }
+  @objc func showSwipeSuggestions() {
+    guard !active,let suggestion=lastSuggestion else {showFeedback("No uninserted suggestion · swipe first");return}
+    for (i,b) in buttons.enumerated() {b.isHidden=i>=suggestion.choices.count;if i<suggestion.choices.count {b.title=suggestion.choices[i]}}
+    keyboard.isHidden=true;guideKeyboardHeight?.constant=0;panel?.setContentSize(NSSize(width:600,height:145))
+    label.stringValue="Choose a suggestion · insertion requires the original field and unchanged caret"
+    panel?.orderFrontRegardless()
+  }
+  func insertSuggestion(_ word:String) {
+    guard !active,let s=lastSuggestion else {return}
+    lastSuggestion=nil // Retire BEFORE any attempt; never replay after a repeated click.
+    guard s.choices.contains(word),runtimeSignatureValid,!trackingBlocks(s.pid),identity(s.field,pid:s.pid),let current=selection(s.field),current.location==s.range.location,current.length==s.range.length,
+      let before=fieldText(s.field),Data(SHA256.hash(data:Data(before.utf8)))==s.digest,
+      let plan=try? WordInsertion.plan(before,location:s.range.location,length:s.range.length,word:word).get() else {showFeedback("Suggestion not sent · original field or caret changed",kind:"suggestionRefused");return}
+    let previous=Set(unresolvedWrites.map(\.id))
+    _=replaceSelectedText(s.field,pid:s.pid,range:s.range,inserted:plan.text,expectedBefore:before)
+    guard let transaction=unresolvedWrites.last(where:{!previous.contains($0.id)}) else {showFeedback("Suggestion not sent · write refused",kind:"suggestionRefused");return}
+    suggestionWriteID=transaction.id
+    let owned=OwnedWord(field:s.field,pid:s.pid,range:s.range,alternatives:s.choices,fingerprint:s.digest,leadingSeparator:plan.leadingSeparator,trailingSeparator:plan.trailingSeparator)
+    if confirmCorrection(owned,transaction:transaction) {return}
+    showFeedback("Suggestion write unconfirmed · check the field; nothing retried",kind:"writeUnconfirmed")
+    correctionPollToken += 1;pollCorrection(owned,writeID:transaction.id,token:correctionPollToken,deadline:ProcessInfo.processInfo.systemUptime+0.25+Self.acceptedWriteSettleSeconds)
   }
   @objc func showLastCorrection() {
     guard !active else {return}
@@ -1167,6 +1222,7 @@ final class GuidePanel: NSPanel {
     abandonActivation()
     deferredLift=nil;liftTimerGeneration += 1
     if active && reason != "OFF" && reason != "Quit" {
+      lastSuggestion=nil;lastSwipeChoices=[]
       let category:String
       switch reason {
       case "Focus changed — cancelled", "Field changed · next fresh swipe uses the current field",

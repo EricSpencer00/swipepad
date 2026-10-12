@@ -15,6 +15,7 @@ final class PlaceholderValueView:NSTextView {
   override func accessibilityValue()->String? {"Owned input placeholder"}
 }
 final class NativeInput:AppDelegate {
+  override var feedbackWindowsEnabled:Bool {false}
   var owned:AXUIElement?
   var contentReads=0
   override func fieldText(_ field:AXUIElement)->String? {contentReads += 1;return super.fieldText(field)}

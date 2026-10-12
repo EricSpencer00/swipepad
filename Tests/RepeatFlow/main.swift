@@ -8,6 +8,7 @@ import TrackpadBridge
 // Real production capture/recognition/continuation handlers; memory-only target and mutation ports.
 // No application launch, listener, permission request, event posting, external AX read or write.
 final class MemoryInput:AppDelegate {
+  override var feedbackWindowsEnabled:Bool {false}
   let ownedField=AXUIElementCreateApplication(40001)
   let otherField=AXUIElementCreateApplication(40002)
   var pid:pid_t=40001
@@ -71,6 +72,7 @@ final class MemoryInput:AppDelegate {
   var postedTextPIDs:[pid_t]=[]
   var acknowledgePostedTextWithoutEditing=false
   var holdPostedCaret=false
+  var richTextSpaceReflow=false
   var trackingPersistenceSucceeds=true
   override func persistWriteTracking()->Bool {trackingPersistenceSucceeds}
   override var runtimeSignatureValid:Bool {simulatedRuntimeSignatureValid}
@@ -86,6 +88,12 @@ final class MemoryInput:AppDelegate {
     let text=String(decoding:units,as:UTF16.self)
     guard let replacement=TextReplacement.replacing(value,location:caret.location,length:caret.length,with:text) else {preconditionFailure("invalid fixture event range")}
     attemptedWords.append(text);value=replacement
+    if richTextSpaceReflow {
+      if caret.length==0,caret.location>0,caret.location<=value.utf16.count,Array(value.utf16)[caret.location-1]==160 {
+        value=TextReplacement.replacing(value,location:caret.location-1,length:1,with:" ")!
+      }
+      if text.hasSuffix(" ") {value=TextReplacement.replacing(value,location:caret.location+text.utf16.count-1,length:1,with:"\u{00a0}")!}
+    }
     if holdPostedCaret {holdPostedCaret=false} else {caret=CFRange(location:caret.location+text.utf16.count,length:0)}
   }
   override func validTarget()->Bool {beforeTargetValidation?();return super.validTarget()}
@@ -772,3 +780,40 @@ let storageFailed=MemoryInput();storageFailed.activate();storageFailed.trackingP
 check(storageFailed.attributeNamesSet.isEmpty && storageFailed.postedTextPIDs.isEmpty && storageFailed.captureDiagnostics.writeAttempts==0 && !storageFailed.writeTrackingReadable,"tracking persistence failure refuses BEFORE any mutation")
 storageFailed.cancel("OFF")
 print("PASS restart guard and durability port; total \(checks)")
+
+let rich=MemoryInput();rich.activate();rich.insertionTransport = .keyboard;rich.richTextSpaceReflow=true
+for _ in 0..<3 {for w in ["cat","world","auto"] {word(rich,w)}}
+let richExpected=String(repeating:"cat world auto ",count:3)
+check(rich.value==String(richExpected.dropLast())+"\u{00a0}" && rich.captureDiagnostics.insertions==9 && rich.unresolvedWrites.isEmpty,"nine repeated words confirm exact own-separator WebKit reflow")
+check(rich.postedTextPIDs==Array(repeating:40001,count:9) && rich.continuationAnchor?.generatedTrailingSeparator==true,"one dispatch per word preserves only generated separator provenance")
+rich.cancel("OFF")
+let unownedReflow=MemoryInput();unownedReflow.value="cat\u{00a0}";unownedReflow.caret=CFRange(location:4,length:0);unownedReflow.activate();unownedReflow.insertionTransport = .keyboard;unownedReflow.richTextSpaceReflow=true;word(unownedReflow,"world")
+check(unownedReflow.captureDiagnostics.insertions==0 && unownedReflow.unresolvedWrites.count==1 && unownedReflow.postedTextPIDs.count==1,"unowned previous NBSP change remains unconfirmed without replay")
+unownedReflow.cancel("OFF")
+let reflowLetters=MemoryInput();reflowLetters.activate();reflowLetters.insertionTransport = .keyboard;reflowLetters.richTextSpaceReflow=true;word(reflowLetters,"cat")
+reflowLetters.value="Cat\u{00a0}";word(reflowLetters,"world")
+check(reflowLetters.postedTextPIDs.count==1 && reflowLetters.captureDiagnostics.writeAttempts==1,"same-caret letter edit invalidates prior separator provenance before next dispatch")
+reflowLetters.cancel("OFF")
+print("PASS exact rich-text reflow and refusal checks; total \(checks)")
+
+let ambiguous=MemoryInput();ambiguous.activate();ambiguous.gestureLexicon=GestureLexicon(words:["cat","catt"],usePrior:false);word(ambiguous,"cat")
+check(ambiguous.captureDiagnostics.recognitionReason=="candidateMargin" && ambiguous.captureDiagnostics.recognitionRankedCount==2 && ambiguous.lastSwipeChoices.count==2 && ambiguous.lastSuggestion != nil,"low-confidence gesture retains ranked choices and score reason")
+check(ambiguous.captureDiagnostics.feedbackKind=="strokeRejected" && (ambiguous.captureDiagnostics.feedbackCount ?? 0)>0 && ambiguous.captureDiagnostics.writeAttempts==0 && ambiguous.statusReason?.contains("Uncertain:")==true,"uncertain gesture gives actionable visible-feedback state without forced text")
+ambiguous.cancel("OFF");ambiguous.insertSuggestion("cat")
+check(ambiguous.value=="cat " && ambiguous.unresolvedWrites.isEmpty && ambiguous.captureDiagnostics.feedbackKind=="suggestionInserted","explicit suggestion choice uses verified original field and confirms once")
+ambiguous.insertSuggestion("cat")
+check(ambiguous.captureDiagnostics.writeAttempts==1,"repeated suggestion action never replays retired choice")
+let emptyRank=MemoryInput();emptyRank.activate();emptyRank.gestureLexicon=GestureLexicon(words:[])
+word(emptyRank,"cat");let feedbackBefore=emptyRank.captureDiagnostics.feedbackCount ?? 0;word(emptyRank,"cat")
+check(emptyRank.captureDiagnostics.recognitionReason=="emptyRanking" && emptyRank.lastSwipeChoices.isEmpty && emptyRank.statusReason?.contains("No matching path")==true,"empty ranking explains rejection instead of silent drop")
+check((emptyRank.captureDiagnostics.feedbackCount ?? 0)>feedbackBefore && emptyRank.captureDiagnostics.writeAttempts==0,"each repeated unrecognized gesture refreshes feedback without mutation")
+emptyRank.cancel("OFF")
+let noFeedbackTarget=MemoryInput();noFeedbackTarget.missingFocus=true;noFeedbackTarget.activate();word(noFeedbackTarget,"cat")
+check((noFeedbackTarget.captureDiagnostics.feedbackCount ?? 0)>0 && noFeedbackTarget.statusReason != nil && noFeedbackTarget.captureDiagnostics.writeAttempts==0,"missing focused field produces feedback without choosing another application")
+noFeedbackTarget.cancel("OFF")
+let pendingFeedback=MemoryInput();pendingFeedback.activate();pendingFeedback.insertionTransport = .keyboard;pendingFeedback.acknowledgePostedTextWithoutEditing=true;word(pendingFeedback,"cat")
+check(pendingFeedback.captureDiagnostics.feedbackKind=="writePending" && pendingFeedback.statusReason?.contains("Candidate: cat")==true && pendingFeedback.unresolvedWrites.count==1,"unconfirmed delivery shows candidate and wait reason without claiming insertion")
+pendingFeedback.cancel("OFF")
+let staleSuggestion=MemoryInput();staleSuggestion.activate();staleSuggestion.gestureLexicon=GestureLexicon(words:["cat","catt"],usePrior:false);word(staleSuggestion,"cat");staleSuggestion.cancel("OFF");staleSuggestion.pid=40002;staleSuggestion.insertSuggestion("cat")
+check(staleSuggestion.captureDiagnostics.feedbackKind=="suggestionRefused" && staleSuggestion.captureDiagnostics.writeAttempts==0 && staleSuggestion.postedTextPIDs.isEmpty,"stale suggestion cannot write after application switch and explains refusal")
+print("PASS every-swipe feedback and explicit choice guards; total \(checks)")

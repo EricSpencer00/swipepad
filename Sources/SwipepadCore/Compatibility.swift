@@ -13,6 +13,24 @@ public enum TextReplacement {
     return value.replacingCharacters(in:range,with:inserted)
   }
 }
+/// Exact receipts for the inserted span and the immediately preceding OWN generated
+/// separator. Never normalizes a whole field or accepts changed user-entered spaces.
+public enum WordReceipts {
+  public struct Values:Sendable {
+    public let exact:String,freshNBSP:String?,precedingSpace:String?,combined:String?
+    public var all:[String] {[exact]+[freshNBSP,precedingSpace,combined].compactMap{$0}}
+  }
+  public static func values(before:String,location:Int,length:Int,inserted:String,previousOwnSeparator:Bool)->Values? {
+    guard let exact=TextReplacement.replacing(before,location:location,length:length,with:inserted) else {return nil}
+    let fresh=inserted.hasSuffix(" ") ? TextReplacement.replacing(exact,location:location+inserted.utf16.count-1,length:1,with:"\u{00a0}"):nil
+    let preceding:String?
+    if previousOwnSeparator,length==0,location>0,let span=TextReplacement.range(in:before,location:location-1,length:1),before[span]=="\u{00a0}" {
+      preceding=TextReplacement.replacing(exact,location:location-1,length:1,with:" ")
+    } else {preceding=nil}
+    let combined=preceding.flatMap {value in inserted.hasSuffix(" ") ? TextReplacement.replacing(value,location:location+inserted.utf16.count-1,length:1,with:"\u{00a0}"):nil}
+    return Values(exact:exact,freshNBSP:fresh,precedingSpace:preceding,combined:combined)
+  }
+}
 /// Word insertion changes only the selected span; existing separators and punctuation stay intact.
 public enum WordInsertion {
   public struct Plan:Equatable,Sendable {
