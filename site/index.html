@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SwipeType.app</title>
+<meta name="description" content="Swipe to type on your MacBook trackpad.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--black:oklch(0 0 0);--white:oklch(1 0 0);--dim:oklch(0.5 0 0);--hair:oklch(0.22 0 0);
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",monospace;--ease:cubic-bezier(0.16,1,0.3,1)}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--black);color:var(--white);font-family:var(--mono);overflow:hidden}
+.intro{position:fixed;inset:0;display:grid;place-items:center;padding:24px;transition:opacity .7s var(--ease)}
+.intro.gone{opacity:0;pointer-events:none}
+.stage{width:min(92vw,460px)}
+.pad{position:relative;aspect-ratio:440/300;border:1px solid var(--hair);transition:opacity .6s var(--ease)}
+.pad.gone{opacity:0}
+.pad svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.key{position:absolute;transform:translate(-50%,-50%);width:8.6%;aspect-ratio:1;display:grid;place-items:center;
+  border:1px solid var(--hair);font:500 clamp(14px,4.2vw,19px)/1 var(--mono);color:var(--dim);opacity:0;transition:color .12s,border-color .12s}
+.key.lit{color:var(--white);border-color:var(--white)}
+.field{margin-top:18px;height:60px;border:1px solid var(--hair);display:flex;align-items:center;padding:0 18px;
+  font:500 clamp(24px,7vw,30px)/1 var(--mono);letter-spacing:.02em;opacity:0;transition:opacity .6s var(--ease)}
+.field.gone{opacity:0}
+.caret{display:inline-block;width:2px;height:28px;background:var(--white);margin-left:4px;animation:blink 1s steps(1) infinite}
+.caret.gone{display:none}
+@keyframes blink{50%{opacity:0}}
+
+/* title: centred, then fades to reveal the content */
+.title{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;
+  opacity:0;transition:opacity .8s var(--ease)}
+.title.on{opacity:1}
+.title.away{opacity:0}
+.title h1{margin:0;font:500 clamp(44px,11vw,104px)/1 var(--mono);letter-spacing:-.01em;white-space:nowrap}
+.title h1 span{color:var(--dim)}
+
+/* content */
+.content{position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:24px;
+  opacity:0;transform:translateY(8px);transition:opacity .9s var(--ease),transform .9s var(--ease)}
+.content.on{opacity:1;transform:none}
+.cta{display:inline-block;padding:16px 34px;border:1px solid var(--white);color:var(--white);text-decoration:none;
+  font:500 15px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;transition:background .2s,color .2s}
+.cta:hover{background:var(--white);color:var(--black)}
+.cta:focus-visible{outline:2px solid var(--white);outline-offset:4px}
+.source{position:absolute;bottom:28px;left:0;right:0;font-size:13px;letter-spacing:.04em}
+.source a{color:var(--dim);text-decoration:none;transition:color .2s}
+.source a:hover{color:var(--white)}
+@media (prefers-reduced-motion: reduce){.caret{animation:none}*{transition-duration:0s!important}}
+</style>
+</head>
+<body>
+<main class="intro" id="intro">
+  <div class="stage">
+    <div class="pad" id="pad"></div>
+    <div class="field" id="field"><span id="text"></span><span class="caret" id="caret"></span></div>
+  </div>
+</main>
+
+<div class="title" id="title" aria-hidden="true"><h1>SwipeType<span>.app</span></h1></div>
+
+<section class="content" id="content">
+  <a class="cta" href="https://github.com/EricSpencer00/swipepad/releases">Download</a>
+  <div class="source"><a href="https://github.com/EricSpencer00/swipepad">GitHub</a></div>
+</section>
+
+<script>
+const NS="http://www.w3.org/2000/svg",W=440,H=300;
+const rows=[["q","w","e","r","t","y","u","i","o","p"],["a","s","d","f","g","h","j","k","l"],["z","x","c","v","b","n","m"]];
+const offs=[0,22,66],P=44,ys=[55,150,245],pos={};
+rows.forEach((r,ri)=>r.forEach((k,i)=>pos[k]=[22+offs[ri]+i*P,ys[ri]]));
+const pad=document.getElementById('pad');
+const keyEls={};
+rows.forEach((r,ri)=>r.forEach((k,i)=>{
+  const [x,y]=pos[k],t=document.createElement('div');
+  t.className='key';t.style.left=(x/W*100)+'%';t.style.top=(y/H*100)+'%';t.textContent=k.toUpperCase();
+  pad.appendChild(t);keyEls[k]={el:t,at:60+(ri*10+i)*22};
+}));
+const svg=document.createElementNS(NS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);pad.appendChild(svg);
+const g=document.createElementNS(NS,'g');svg.appendChild(g);
+
+// Smooth Catmull-Rom through the landing points: rounded turnarounds, no corners.
+const N=36;
+function spline(pts){
+  const samples=[];
+  const at=i=>pts[Math.max(0,Math.min(pts.length-1,i))];
+  for(let i=0;i<pts.length-1;i++){
+    const p0=at(i-1),p1=at(i),p2=at(i+1),p3=at(i+2);
+    const c1=[p1[0]+(p2[0]-p0[0])/6,p1[1]+(p2[1]-p0[1])/6],c2=[p2[0]-(p3[0]-p1[0])/6,p2[1]-(p3[1]-p1[1])/6];
+    for(let k=0;k<N;k++){const t=k/N,u=1-t;
+      samples.push([u*u*u*p1[0]+3*u*u*t*c1[0]+3*u*t*t*c2[0]+t*t*t*p2[0],u*u*u*p1[1]+3*u*u*t*c1[1]+3*u*t*t*c2[1]+t*t*t*p2[1]]);}
+  }
+  samples.push(pts[pts.length-1]);
+  const arc=[0];for(let i=1;i<samples.length;i++)arc.push(arc[i-1]+Math.hypot(samples[i][0]-samples[i-1][0],samples[i][1]-samples[i-1][1]));
+  return {samples,arc};
+}
+
+// Speed follows curvature: slow through turnarounds, quick across straights.
+// Landing is a few px off each key centre, so it reads as a person, not a grid.
+function buildSwipe(word,shown,start,duration,seed){
+  const letters=word.split('');
+  const keys=letters.map((l,i)=>{const p=pos[l];
+    return [p[0]+Math.sin((i+1)*12.9898+seed)*5, p[1]+Math.cos((i+1)*78.233+seed)*4];});
+  const {samples,arc}=spline(keys);
+  const n=samples.length,L=arc[n-1];
+  const heading=i=>{const a=samples[Math.max(0,i-2)],b=samples[Math.min(n-1,i+2)];return Math.atan2(b[1]-a[1],b[0]-a[0]);};
+  const speed=[];
+  for(let i=0;i<n;i++){
+    const h0=heading(Math.max(0,i-2)),h1=heading(Math.min(n-1,i+2));
+    let dh=Math.abs(h1-h0);if(dh>Math.PI)dh=2*Math.PI-dh;
+    const kappa=dh/Math.max(1,Math.min(i,n-1-i)+1);
+    speed.push(1/(0.35+kappa*60));
+  }
+  const tAt=[0];for(let i=1;i<n;i++){const ds=arc[i]-arc[i-1];tAt.push(tAt[i-1]+ds/((speed[i]+speed[i-1])/2));}
+  const k=duration/tAt[n-1];
+  for(let i=0;i<n;i++)tAt[i]*=k;
+  const sAtTime=t=>{
+    if(t<=0)return 0; if(t>=duration)return L;
+    let lo=0,hi=n-1;while(hi-lo>1){const m=(lo+hi)>>1;if(tAt[m]<=t)lo=m;else hi=m;}
+    const f=(t-tAt[lo])/((tAt[hi]-tAt[lo])||1);return arc[lo]+(arc[hi]-arc[lo])*f;
+  };
+  const land=letters.map((_,i)=>start+tAt[i===letters.length-1?n-1:i*N]);
+  const path=document.createElementNS(NS,'path');
+  path.setAttribute('d','M'+samples.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L'));
+  path.setAttribute('fill','none');path.setAttribute('stroke','#fff');path.setAttribute('stroke-width','3.6');
+  path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');
+  path.setAttribute('stroke-dasharray',L);path.setAttribute('stroke-dashoffset',L);path.style.opacity=0;
+  g.appendChild(path);
+  return {word:shown,letters,land,start,end:start+duration,path,L,sAtTime};
+}
+
+// Timeline: zebra -> backspace -> swipe -> type, then the title and the content.
+const BS_STEP=120,GAP=380;
+const events=[];
+let cur=900;
+const a=buildSwipe("zebra","zebra",cur,1050,1.7);events.push({kind:'swipe',...a});cur=a.end+GAP;
+const bsStart=cur,bsCount=5;events.push({kind:'bs',start:bsStart,count:bsCount});cur=bsStart+bsCount*BS_STEP+GAP;
+const b=buildSwipe("swipe","Swipe",cur,980,4.2);events.push({kind:'swipe',...b});cur=b.end+GAP;
+const c=buildSwipe("type","Type",cur,740,6.9);events.push({kind:'swipe',...c});
+const typeEnd=c.end;
+// after "SwipeType" holds, the keyboard leaves, the title takes the centre, then the content arrives
+const KEYS_OUT=typeEnd+1500, TITLE_IN=KEYS_OUT+650, TITLE_OUT=TITLE_IN+1700, CONTENT_IN=TITLE_OUT+500;
+
+const field=document.getElementById('field'),textEl=document.getElementById('text'),caret=document.getElementById('caret');
+const intro=document.getElementById('intro'),title=document.getElementById('title'),content=document.getElementById('content');
+function textAt(t){
+  let base='';
+  for(const e of events){
+    if(e.kind==='swipe'){
+      if(t<e.start)return base;
+      if(t<e.end){const n=e.land.filter(x=>x<=t).length;return base+e.word.slice(0,n);}
+      base+=e.word;
+    } else {
+      if(t<e.start)return base;
+      const removed=Math.min(base.length,Math.floor((t-e.start)/BS_STEP)+1);
+      base=base.slice(0,base.length-removed);
+      if(t<e.start+e.count*BS_STEP)return base;
+    }
+  }
+  return base;
+}
+const t0=performance.now();
+let done=false;
+function frame(now){
+  const t=now-t0;
+  Object.values(keyEls).forEach(k=>{const f=Math.max(0,Math.min(1,(t-k.at)/260)),e=1-Math.pow(1-f,3);
+    k.el.style.opacity=e;k.el.style.transform=`translate(-50%,calc(-50% + ${(1-e)*12}px)) scale(${0.9+0.1*e})`;});
+  events.forEach(e=>{if(e.kind!=='swipe')return;
+    const s=t<e.start?0:(t>=e.end?e.L:e.sAtTime(t-e.start));
+    e.path.setAttribute('stroke-dashoffset',e.L-s);
+    e.path.style.opacity=t<e.start?0:(t<e.end+500?1:Math.max(0,1-(t-e.end-500)/500));
+    e.letters.forEach((l,i)=>{const on=t>=e.land[i]&&t<e.land[i]+320;keyEls[l].el.classList.toggle('lit',on);});
+  });
+  const shown=textAt(t);
+  textEl.textContent=t>=TITLE_IN?'':shown;
+  field.style.opacity=t>200?1:0;
+  if(t>=KEYS_OUT){pad.classList.add("gone");field.classList.add("gone");intro.classList.add("gone");}
+  if(t>=TITLE_IN)title.classList.add('on');
+  if(t>=TITLE_OUT){title.classList.remove('on');title.classList.add('away');}
+  if(t>=CONTENT_IN){content.classList.add('on');}
+  if(t<CONTENT_IN+2000) requestAnimationFrame(frame);
+}
+if(matchMedia('(prefers-reduced-motion: reduce)').matches){
+  Object.values(keyEls).forEach(k=>{k.el.style.opacity=1;k.el.style.transform='translate(-50%,-50%)';});
+  intro.classList.add('gone');content.classList.add('on');
+}else requestAnimationFrame(frame);
+</script>
+</body>
+</html>
