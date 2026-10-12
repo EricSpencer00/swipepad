@@ -10,6 +10,8 @@ struct RuntimeHealth:Codable {
   let kind:String,scope:String,runtimeIdentity:String
   let signatureMatchesDisk:Bool,accessibilityTrusted:Bool,monitorInstalled:Bool
   let keyboardPostAccess:Bool?
+  let menuBarVisible:Bool?
+  let accessoryApp:Bool?
 }
 
 @MainActor extension AppDelegate {
@@ -20,7 +22,7 @@ struct RuntimeHealth:Codable {
     return SecCodeCheckValidity(code,SecCSFlags(rawValue:kSecCSStrictValidate),nil)==errSecSuccess
   }
   func runtimeHealth(live:Bool)->RuntimeHealth {
-    RuntimeHealth(kind:"identityPermission",scope:live ? "Live GUI identity and trust; no field queries":"Diagnostic process identity and trust; not the GUI process",runtimeIdentity:captureRuntimeIdentity(),signatureMatchesDisk:runtimeSignatureValid,accessibilityTrusted:AXIsProcessTrusted(),monitorInstalled:globalMonitor != nil,keyboardPostAccess:canPostText)
+    RuntimeHealth(kind:"identityPermission",scope:live ? "Live GUI identity and trust; no field queries":"Diagnostic process identity and trust; not the GUI process",runtimeIdentity:captureRuntimeIdentity(),signatureMatchesDisk:runtimeSignatureValid,accessibilityTrusted:AXIsProcessTrusted(),monitorInstalled:globalMonitor != nil,keyboardPostAccess:canPostText,menuBarVisible:status?.isVisible==true,accessoryApp:NSApp?.activationPolicy() == .accessory)
   }
   func captureRuntimeIdentity()->String {
     if let captureIdentityCache {return captureIdentityCache}
@@ -30,7 +32,7 @@ struct RuntimeHealth:Codable {
     captureIdentityCache=identity;return identity
   }
   func outstandingWriteReports()->[OutstandingWriteReport] {
-    unresolvedWrites.map {write in
+    carriedWriteGuards + unresolvedWrites.map {write in
       OutstandingWriteReport(pid:write.pid,bundleIdentifier:NSRunningApplication(processIdentifier:write.pid)?.bundleIdentifier,expectedCaret:write.expectedCaret,transactionID:write.id.uuidString,mutationAccepted:write.mutationAccepted,caretAttemptPending:write.deferredCaret)
     }
   }
@@ -192,7 +194,7 @@ struct RuntimeHealth:Codable {
   func updateModeIndicator() {
     guard let button = status?.button else { return }
     let state = active ? "On" : (!AXIsProcessTrusted() || globalMonitor == nil ? "Needs setup" : "Ready")
-    button.title = ""
+    button.title = "Swipepad"
     for item in status.menu?.items ?? [] where item.action == #selector(chooseMode(_:)) {
       item.isEnabled = !active
     }

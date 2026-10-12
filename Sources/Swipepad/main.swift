@@ -3,7 +3,14 @@ import Darwin
 import Foundation
 
 let delegate = AppDelegate()
-if let index = CommandLine.arguments.firstIndex(of: "--render-previews"), CommandLine.arguments.indices.contains(index + 1) {
+if CommandLine.arguments.contains("--stored-write-tracking") {
+  delegate.loadWriteTracking()
+  guard delegate.writeTrackingReadable,let data=try? JSONEncoder().encode(delegate.outstandingWriteReports()),let json=String(data:data,encoding:.utf8) else {exit(2)}
+  print(json);exit(0)
+} else if let index=CommandLine.arguments.firstIndex(of:"--preserve-write-tracking"),CommandLine.arguments.indices.contains(index+1) {
+  guard delegate.importWriteTracking(CommandLine.arguments[index+1]) else {print("Tracking preservation failed; no restart or text action performed.");exit(2)}
+  print("Unconfirmed-write protection preserved; no field query or text replay.");exit(0)
+} else if let index = CommandLine.arguments.firstIndex(of: "--render-previews"), CommandLine.arguments.indices.contains(index + 1) {
   do { try renderPreviews(to: CommandLine.arguments[index + 1], owner: delegate) } catch { print(error); exit(2) }
  } else if CommandLine.arguments.contains("--self-health") || CommandLine.arguments.contains("--health-status") {
   let report:RuntimeHealth?

@@ -67,6 +67,7 @@ if CommandLine.arguments.contains("--host") {
 
 // Virtual contact source only in the owned fixture; production activation uses real hardware.
 final class WebFixtureInput:AppDelegate {
+ override var writeTrackingEnabled:Bool {false} // Disposable fixture never modifies production tracking.
  // Scope every production lookup to this test's exact child, even if desktop focus races.
  override var currentApplicationPID:pid_t? {NSWorkspace.shared.frontmostApplication?.processIdentifier==hostProcess.processIdentifier ? hostProcess.processIdentifier:nil}
  override func focused(_ pid:pid_t)->AXUIElement? {guard pid==hostProcess.processIdentifier,hostProcess.isRunning else {return nil};return super.focused(pid)}

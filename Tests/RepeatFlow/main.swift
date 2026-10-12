@@ -71,6 +71,8 @@ final class MemoryInput:AppDelegate {
   var postedTextPIDs:[pid_t]=[]
   var acknowledgePostedTextWithoutEditing=false
   var holdPostedCaret=false
+  var trackingPersistenceSucceeds=true
+  override func persistWriteTracking()->Bool {trackingPersistenceSucceeds}
   override var runtimeSignatureValid:Bool {simulatedRuntimeSignatureValid}
   override var secureInputActive:Bool {simulatedSecureInput}
   override var canPostText:Bool {simulatedPostAccess}
@@ -761,3 +763,12 @@ delayedAXCorrection.delayedValuePublication=true;delayedAXCorrection.selectCandi
 RunLoop.current.run(until:Date().addingTimeInterval(0.06))
 check(delayedAXCorrection.value=="cat " && delayedAXCorrection.caret.location==4 && delayedAXCorrection.caret.length==0 && delayedAXCorrection.unresolvedWrites.isEmpty && delayedAXCorrection.captureDiagnostics.correctionResult=="confirmed","delayed value-only correction settles its caret once after exact content without another text write")
 print("PASS deferred AX correction receipt; total \(checks)")
+
+let carried=MemoryInput();carried.carriedWriteGuards=[OutstandingWriteReport(pid:40001,bundleIdentifier:nil,expectedCaret:2,transactionID:UUID().uuidString,mutationAccepted:true)];carried.activate();word(carried,"cat")
+check(carried.captureDiagnostics.writeAttempts==0 && carried.attributeNamesSet.isEmpty && carried.captureDiagnostics.lastTargetRefusal=="preservedUnconfirmedWrite","restart-carried unknown write blocks original process without text replay")
+carried.cancel("OFF")
+check(carried.outstandingWriteReports().count==1,"ordinary cancellation preserves carried metadata guard")
+let storageFailed=MemoryInput();storageFailed.activate();storageFailed.trackingPersistenceSucceeds=false;word(storageFailed,"cat")
+check(storageFailed.attributeNamesSet.isEmpty && storageFailed.postedTextPIDs.isEmpty && storageFailed.captureDiagnostics.writeAttempts==0 && !storageFailed.writeTrackingReadable,"tracking persistence failure refuses BEFORE any mutation")
+storageFailed.cancel("OFF")
+print("PASS restart guard and durability port; total \(checks)")

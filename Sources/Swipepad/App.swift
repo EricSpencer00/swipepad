@@ -60,6 +60,48 @@ final class GuidePanel: NSPanel {
   var pending = false
   struct UnresolvedWrite {let id:UUID;let field:AXUIElement;let pid:pid_t;let originalRange:CFRange;let beforeDigest:Data?;let expectedCaret:Int;let expectedDigest:Data?;var separatorDigest:Data?=nil;var trimmedSeparator=false;var trimmedDigest:Data?=nil;var deferredCaret=false;var mutationAccepted=false}
   var unresolvedWrites:[UnresolvedWrite]=[]
+  var carriedWriteGuards:[OutstandingWriteReport]=[]
+  var writeTrackingReadable=true
+  var writeTrackingEnabled:Bool {Bundle.main.bundleIdentifier==Self.bundleID && Bundle.main.bundleURL.pathExtension=="app"}
+  static let trackingKey="unconfirmedWriteGuards.v1"
+  var trackingURL:URL {FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Swipepad/UnconfirmedWrites.json")}
+  func loadWriteTracking() {
+    guard writeTrackingEnabled else {return}
+    guard FileManager.default.fileExists(atPath:trackingURL.path) else {return}
+    guard let data=try? Data(contentsOf:trackingURL) else {writeTrackingReadable=false;return}
+    guard let records=try? JSONDecoder().decode([OutstandingWriteReport].self,from:data),records.allSatisfy({$0.pid>0 && $0.expectedCaret>=0 && $0.transactionID.flatMap(UUID.init(uuidString:)) != nil}) else {writeTrackingReadable=false;return}
+    carriedWriteGuards=records
+  }
+  func trackingBlocks(_ pid:pid_t)->Bool { !writeTrackingReadable || carriedWriteGuards.contains {$0.pid==pid} }
+  @discardableResult func persistWriteTracking()->Bool {
+    guard writeTrackingEnabled else {return true}
+    guard writeTrackingReadable,let data=try? JSONEncoder().encode(outstandingWriteReports()) else {return false}
+    do {
+      try FileManager.default.createDirectory(at:trackingURL.deletingLastPathComponent(),withIntermediateDirectories:true)
+      try data.write(to:trackingURL,options:.atomic)
+      return try Data(contentsOf:trackingURL)==data
+    } catch {return false}
+  }
+  func importWriteTracking(_ path:String)->Bool {
+    guard writeTrackingEnabled,runtimeSignatureValid,let data=try? Data(contentsOf:URL(fileURLWithPath:path)),data.count<262144,
+      let report=try? JSONDecoder().decode(DoctorReport.self,from:data),report.scope.hasPrefix("Live capture counters"),let records=report.outstandingWrites,
+      records.allSatisfy({$0.pid>0 && $0.expectedCaret>=0 && $0.transactionID.flatMap(UUID.init(uuidString:)) != nil}) else {return false}
+    loadWriteTracking();guard writeTrackingReadable else {return false}
+    let known=Set(carriedWriteGuards.compactMap(\.transactionID))
+    carriedWriteGuards += records.filter {!known.contains($0.transactionID ?? "")}
+    return persistWriteTracking()
+  }
+  @objc func reviewWriteTracking() {
+    guard !active,let record=outstandingWriteReports().first,let id=record.transactionID else {return}
+    let alert=NSAlert();alert.messageText="A previous write is unconfirmed"
+    let name=NSRunningApplication(processIdentifier:record.pid)?.localizedName ?? "the original app"
+    alert.informativeText="Check and save the unsent draft in \(name) before clearing this write's tracking. Clearing changes no draft text and never replays the word. Other pending records remain protected."
+    alert.addButton(withTitle:"Keep protection");alert.addButton(withTitle:"Clear this write's tracking")
+    guard alert.runModal() == .alertSecondButtonReturn else {return}
+    carriedWriteGuards.removeAll {$0.transactionID==id};unresolvedWrites.removeAll {$0.id.uuidString==id}
+    if !persistWriteTracking() {writeTrackingReadable=false}
+    updateModeIndicator()
+  }
   var strokeCancellationGeneration=0
   var sessionGeneration=0
   var correctionPollToken=0
@@ -98,6 +140,7 @@ final class GuidePanel: NSPanel {
     menuItem.action == #selector(showLastCorrection) ? (!active && lastOwnedWord != nil) : (menuItem.action == #selector(chooseMode(_:)) ? !active : true)
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
+    loadWriteTracking()
     _ = captureRuntimeIdentity() // Cache immutable running-build identity while Off.
     _ = gestureLexicon // Build the immutable index while Off, before any capture/listener work.
     _ = WordCommonness.tier("zzzz") // Warm all commonness sets before active capture.
@@ -110,11 +153,12 @@ final class GuidePanel: NSPanel {
     NSApp.setActivationPolicy(.accessory)
     status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     installStatusIcon()
-    status.button?.title = ""
+    status.isVisible=true
+    status.button?.title = "Swipepad"
     let menu = NSMenu()
     menu.addItem(
       withTitle: "Swipepad: Off", action: nil, keyEquivalent: "")
-    menu.addItem(withTitle: "Start Swiping ⌘⌘", action: nil, keyEquivalent: "")
+    menu.addItem(withTitle: "Start Swiping ⌘⌘", action: #selector(toggle), keyEquivalent: "")
     menu.addItem(
       withTitle: "Show Keyboard Guide", action: #selector(toggleGuide), keyEquivalent: ""
     ).state = UserDefaults.standard.bool(forKey: "showGuide") ? .on : .off
@@ -126,6 +170,7 @@ final class GuidePanel: NSPanel {
     menu.addItem(withTitle:"On-Screen Guide Layout…",action:#selector(showOverlayLayout),keyEquivalent:"")
     menu.addItem(.separator())
     menu.addItem(withTitle: "Correct Last Word…", action: #selector(showLastCorrection), keyEquivalent: "")
+    menu.addItem(withTitle:"Review Unconfirmed Write…",action:#selector(reviewWriteTracking),keyEquivalent:"")
     menu.addItem(withTitle: "Setup…", action: #selector(showSetup), keyEquivalent: "")
     menu.addItem(withTitle: "Quit Swipepad", action: #selector(quit), keyEquivalent: "q")
     for item in menu.items { item.target = self }
@@ -527,6 +572,10 @@ final class GuidePanel: NSPanel {
     guard !secureContextActive() else {exitSecureContext();return false}
     focusLookupErrors=(nil,nil)
     let candidatePID=currentApplicationPID
+    if let pid=candidatePID,trackingBlocks(pid) {
+      captureDiagnostics.stage="fieldRefused";recordTargetRefusal("preservedUnconfirmedWrite")
+      showFeedback("Previous write unconfirmed · review tracking from the Swipepad menu; nothing replayed");return false
+    }
     let candidateField=candidatePID.flatMap {$0 == ProcessInfo.processInfo.processIdentifier ? nil:focused($0)}
     captureDiagnostics.applicationFocusAXError=focusLookupErrors.application
     captureDiagnostics.systemFocusAXError=focusLookupErrors.system
@@ -812,6 +861,7 @@ final class GuidePanel: NSPanel {
     return digest==write.expectedDigest || (write.separatorDigest != nil && digest==write.separatorDigest)
   }
   func permitsResolvedWrite(_ field:AXUIElement,pid:pid_t,range:CFRange,resolvePending:Bool=false)->Bool {
+    guard !trackingBlocks(pid) else {return false}
     let sameProcess=unresolvedWrites.filter {$0.pid==pid}
     guard !sameProcess.isEmpty else {return true}
     // A rebuilt AX reference or sibling field cannot make an uncertain mutation disappear.
@@ -829,6 +879,7 @@ final class GuidePanel: NSPanel {
       continuationAnchor=confirmed
     }
     let ids=Set(matching.map(\.id));unresolvedWrites.removeAll {ids.contains($0.id)}
+    if !persistWriteTracking() {writeTrackingReadable=false}
     return true
   }
   static func textEvents(_ text:String)->(CGEvent,CGEvent)? {
@@ -873,6 +924,7 @@ final class GuidePanel: NSPanel {
     let separatorValue=inserted.hasSuffix(" ") ? TextReplacement.replacing(expected,location:range.location+inserted.utf16.count-1,length:1,with:"\u{00a0}"):nil
     var write=UnresolvedWrite(id:UUID(),field:field,pid:pid,originalRange:range,beforeDigest:Data(SHA256.hash(data:Data(before.utf8))),expectedCaret:range.location+inserted.utf16.count,expectedDigest:Data(SHA256.hash(data:Data(expected.utf8))),separatorDigest:separatorValue.map {Data(SHA256.hash(data:Data($0.utf8)))},trimmedDigest:(inserted.hasSuffix(" ") && range.location+inserted.utf16.count==expected.utf16.count) ? Data(SHA256.hash(data:Data(expected.dropLast().utf8))):nil,deferredCaret:!keyboardBackend && useValueBackend)
     unresolvedWrites.append(write) // BEFORE mutation: even an error may follow accepted AXValue.
+    guard persistWriteTracking() else {unresolvedWrites.removeAll {$0.id==write.id};writeTrackingReadable=false;return .cannotComplete}
     captureDiagnostics.writeAttempts += 1
     captureDiagnostics.lastInsertionBackend=keyboardBackend ? "targetedKeyboard":(useValueBackend ? "valueAndCaret":"selectedText")
     let result:AXError
@@ -893,6 +945,7 @@ final class GuidePanel: NSPanel {
       captureDiagnostics.acceptedMutations += 1
       write.mutationAccepted=true
       if let index=unresolvedWrites.firstIndex(where:{$0.id==write.id}) {unresolvedWrites[index]=write}
+      if !persistWriteTracking() {writeTrackingReadable=false}
     }
     if !keyboardBackend && useValueBackend {return settleDeferredCaret(write.id)}
     return result
@@ -912,6 +965,7 @@ final class GuidePanel: NSPanel {
     }
     // Retire the caret attempt before calling AX, including errors or delayed acknowledgements.
     write.deferredCaret=false;unresolvedWrites[index]=write
+    guard persistWriteTracking() else {writeTrackingReadable=false;return .cannotComplete}
     var caret=CFRange(location:write.expectedCaret,length:0)
     guard let value=AXValueCreate(.cfRange,&caret) else {return .cannotComplete}
     let result=setAttribute(write.field,kAXSelectedTextRangeAttribute,value)
