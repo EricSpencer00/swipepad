@@ -20,6 +20,14 @@ public enum Keyboard {
     }
     return result
   }()
+  /// Whole-pad nearest center; alphabetic ordering makes boundary ties deterministic.
+  public static func nearestKey(_ point:Point) -> Character? {
+    guard point.x.isFinite,point.y.isFinite,(0...1).contains(point.x),(0...1).contains(point.y) else {return nil}
+    return keys.keys.sorted().min {a,b in
+      let da=keys[a]!.distance(point),db=keys[b]!.distance(point)
+      return da == db ? a < b : da < db
+    }
+  }
   public static func path(_ word: String) -> [Point] {
     let points = word.lowercased().compactMap { keys[$0] }
     guard let first = points.first else { return [] }
@@ -119,18 +127,18 @@ public enum FieldSubrole: Equatable, Sendable {
 }
 public enum FieldPolicy {
   public static func permits(
-    role: String?, subrole: FieldSubrole, selectedTextSettable: Bool, secureInput: Bool
+    role: String?, subrole: FieldSubrole, insertionSettable: Bool, secureInput: Bool
   ) -> Bool {
-    guard !secureInput, selectedTextSettable else { return false }
+    guard !secureInput, insertionSettable else { return false }
     guard let role, ["AXTextArea", "AXTextField", "AXComboBox"].contains(role) else { return false }
     switch subrole {
     case .unreadable:
       return false
     case .absent:
-      // AXTextArea has no required subrole; native editors and browser textareas
-      // legitimately return attributeUnsupported/noValue. Text fields still need
-      // explicit nonsecure metadata because password controls share that role.
-      return role == "AXTextArea"
+      // Ordinary native single-line fields and browser textareas legitimately
+      // omit this optional attribute. Explicit secure subroles and Secure Input
+      // are rejected separately; unreadable metadata still fails closed.
+      return true
     case .named(let name):
       return name == "AXUnknown" || (role == "AXTextField" && name == "AXSearchField")
     }

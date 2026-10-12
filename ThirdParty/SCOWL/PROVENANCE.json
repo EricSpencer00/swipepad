@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/BartMassey/wordlists",
+  "revision": "af52415c13af809bd8757a40f17f46e79d09583c",
+  "file": "scowl-50.txt.gz",
+  "compressed_sha256": "662b951457801dbf91176c25a79807e2b7e93e136c2dc0dd4d6d99303f893319",
+  "modification": "ASCII lowercase alphabetic length2...24; sorted deduplicated",
+  "filtered_words": 63362
+}

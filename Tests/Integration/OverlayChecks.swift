@@ -6,6 +6,8 @@ import Foundation
 import SwipepadCore
 import TrackpadBridge
 
+@MainActor var overlayReferencePoints:[Point]=[]
+@MainActor var overlayReferenceCandidates:[String]=[]
 @MainActor var overlayTrial=0
 @MainActor func later(_ delay:Double=0.04,_ action:@escaping @MainActor ()->Void) {
   let timer=Timer(timeInterval:delay,repeats:false) {_ in MainActor.assumeIsolated {action()}}
@@ -74,34 +76,46 @@ import TrackpadBridge
   }
 }
 @MainActor func overlayStart()->Bool {
-  delegate.toggle()
+  let starting = !delegate.active
+  if starting {delegate.toggle()}
   guard delegate.active,delegate.validTarget(),delegate.strokeSource == .screenOverlay,
-    delegate.overlayPanel?.isVisible == true,delegate.overlayFrame?.isValid == true else {return false}
+    delegate.overlayPanel?.isVisible == true,delegate.overlayFrame?.isValid == true,!delegate.waitForLift,
+    !starting || delegate.listener != nil else {return false}
   if let listener=delegate.listener {OpenMTManager.shared().remove(listener);delegate.listener=nil}
-  frame(nil)
-  return true
+  return true // Cold first contact must not require a fabricated idle callback.
 }
 @MainActor func feedOverlay(_ points:[Point],index:Int=0,then:@escaping @MainActor ()->Void) {
-  guard let calibration=delegate.overlayFrame,delegate.active,delegate.validTarget() else {stop("ABORT: overlay fixture lost calibration/target.");return}
+  guard delegate.overlayFrame != nil,delegate.active,delegate.validTarget() else {stop("ABORT: overlay fixture lost calibration/target.");return}
   if index==points.count {frame(nil);then();return}
-  moveCursor(calibration.screenPoint(points[index])) {
-    // Deliberately unrelated physical position proves this mode samples cursor geometry.
-    frame(Point(0.01,0.02))
-    guard delegate.active,let last=delegate.strokeSamples.last,
-      last.source == .screenOverlay,last.point.distance(points[index])<0.005 else {stop("FAIL: overlay used physical coordinates or lost cursor sample.");return}
-    feedOverlay(points,index:index+1,then:then)
-  }
+  frame(points[index]) // No mouse event or cursor position contributes to the physical sample.
+  guard delegate.active,let last=delegate.strokeSamples.last,last.source == .screenOverlay,
+    last.point.distance(points[index])<0.000001 else {stop("FAIL: normalized physical sample lost or cold contact gated.");return}
+  later(0.005) {feedOverlay(points,index:index+1,then:then)}
+}
+@MainActor func physicalLift(_ point:Point) {
+  let event=OpenMTEvent(),touch=OpenMTTouch()
+  event.setValue(ProcessInfo.processInfo.systemUptime,forKey:"timestamp")
+  touch.setValue(1,forKey:"identifier");touch.setValue(OpenMTState.breaking.rawValue,forKey:"state")
+  touch.setValue(Float(point.x),forKey:"posX");touch.setValue(Float(point.y),forKey:"posY")
+  event.setValue([touch],forKey:"touches");delegate.touchFrame(event)
 }
 @MainActor func overlayCandidateTrial() {
   guard let field=ownedField(),let baseline=delegate.attribute(field,kAXValueAttribute) as? String,
     let range=delegate.selection(field),overlayStart(),let calibration=delegate.overlayFrame else {stop("FAIL: native overlay trial activation.");return}
   overlayTrial += 1
-  moveCursor(calibration.screenPoint(Point(0.4,0.5))) {
+  let other=NSScreen.screens.first {screen in !screen.frame.contains(CGPoint(x:calibration.x,y:calibration.y))}
+  let cursorProbe:Point=overlayTrial==1 ? calibration.screenPoint(Point(0.9,0.8)) : overlayTrial==2 ? Point(calibration.x-30,calibration.y-30) : other.map {Point($0.frame.midX,$0.frame.midY)} ?? calibration.screenPoint(Point(0.1,0.2))
+  moveCursor(cursorProbe) {
     guard delegate.strokeSamples.isEmpty,delegate.finger==nil,delegate.validTarget() else {stop("FAIL: pointer movement alone started a stroke.");return}
-    feedOverlay(Keyboard.path(overlayTrial==2 ? "world" : "hello")) {
+    feedOverlay(Keyboard.path("hello")) {
       guard delegate.pending,!delegate.strokeSamples.isEmpty,
         delegate.overlayKeyboard.path==delegate.strokeSamples.map(\.point),
         delegate.strokeSamples.first?.phase == .began,delegate.strokeSamples.last?.phase == .ended else {stop("FAIL: completed overlay trail/sample mismatch.");return}
+      let normalized=delegate.strokeSamples.map(\.point)
+      let candidates=delegate.buttons.filter {!$0.isHidden}.map(\.title)
+      if overlayTrial==1 {overlayReferencePoints=normalized;overlayReferenceCandidates=candidates}
+      else {guard normalized==overlayReferencePoints,candidates==overlayReferenceCandidates,
+        Keyboard.nearestKey(normalized.first!)==Keyboard.nearestKey(overlayReferencePoints.first!),normalized.last==overlayReferencePoints.last else {stop("FAIL: physical stroke depends on system pointer position.");return}}
       let index=overlayTrial==2 ? 1 : 0,button=delegate.buttons[overlayTrial==2 ? 1 : 0]
       guard !button.isHidden else {stop("FAIL: overlay candidate missing.");return}
       let chosen=button.title
@@ -114,8 +128,8 @@ import TrackpadBridge
         mouseClick(Point(center.x,center.y),scope:{ownedField().map({CFEqual($0,field)})==true}) {
           guard let current=ownedField(),CFEqual(current,field),
             delegate.attribute(current,kAXValueAttribute) as? String==receipt,
-            !delegate.active,!delegate.panel.isVisible,delegate.overlayPanel?.isVisible == false else {stop("FAIL: overlay candidate click receipt/focus/once-only cancellation.");return}
-          print("PASS: overlay trial \(overlayTrial), native body absorption + candidate rank \(index+1) click; exact owned receipt and focus preserved; synthetic cursor/contact trace.")
+            delegate.active,!delegate.pending,delegate.validTarget(),delegate.panel.isVisible,delegate.overlayPanel?.isVisible == true else {stop("FAIL: overlay candidate click receipt/focus/continuation.");return}
+          print("PASS: overlay trial \(overlayTrial), native body absorption + candidate rank \(index+1) click; exact owned receipt and focus preserved; synthetic absolute physical-contact trace.")
           if overlayTrial<3 {overlayCandidateTrial()} else {overlayEndpointAndEscape()}
         }
       }
@@ -133,7 +147,8 @@ import TrackpadBridge
     feedWithoutLift(Array(points.dropLast())) {
       let before=delegate.overlayKeyboard.path.last
       moveCursor(calibration.screenPoint(points.last!)) {
-        frame(nil)
+        physicalLift(points.last!)
+        later(0.02) {
         guard delegate.pending,let final=delegate.strokeSamples.last,final.phase == .ended,
           before != final.point,delegate.overlayKeyboard.path.last==final.point,
           delegate.overlayKeyboard.path==delegate.strokeSamples.map(\.point) else {stop("FAIL: final lift endpoint not rendered.");return}
@@ -146,32 +161,29 @@ import TrackpadBridge
           print("PASS: overlay pending cancelled by native synthetic Escape; both panels hidden; owned field unchanged.")
           overlayRetryAndBounds()
         }}
+        }
       }
     }
   }
 }
 @MainActor func feedWithoutLift(_ points:[Point],index:Int=0,then:@escaping @MainActor ()->Void) {
-  guard let calibration=delegate.overlayFrame else {stop("ABORT: endpoint calibration missing.");return}
+  guard delegate.overlayFrame != nil else {stop("ABORT: endpoint calibration missing.");return}
   if index==points.count {then();return}
-  moveCursor(calibration.screenPoint(points[index])) {frame(Point(0.01,0.02));feedWithoutLift(points,index:index+1,then:then)}
+  frame(points[index]);later(0.005) {feedWithoutLift(points,index:index+1,then:then)}
 }
 @MainActor func overlayRetryAndBounds() {
   guard let field=ownedField(),let baseline=delegate.attribute(field,kAXValueAttribute) as? String,overlayStart(),let calibration=delegate.overlayFrame else {stop("FAIL: overlay retry activation.");return}
-  feedWithoutLift([Point(0.2,0.8),Point(0.4,0.5)]) {
-    moveCursor(calibration.screenPoint(Point(1.02,0.5))) {
-      frame(Point(0.01,0.02));frame(nil)
-      guard delegate.pending,delegate.buttons.allSatisfy(\.isHidden),delegate.label.stringValue.contains("Outside keyboard"),delegate.attribute(field,kAXValueAttribute) as? String==baseline else {stop("FAIL: outside overlay stroke not explicitly rejected.");return}
-      delegate.retry();frame(nil)
+  feedOverlay([Point(0.2,0.8),Point(0.4,0.5),Point(1.02,0.5)]) {
+      guard delegate.pending,delegate.buttons.allSatisfy(\.isHidden),delegate.label.stringValue.contains("outside pad range"),delegate.attribute(field,kAXValueAttribute) as? String==baseline else {stop("FAIL: outside overlay stroke not explicitly rejected.");return}
       feedOverlay(Keyboard.path("cat")) {
         guard delegate.pending,delegate.validTarget(),delegate.buttons.contains(where:{!$0.isHidden}) else {stop("FAIL: overlay retry after bounds rejection.");return}
         delegate.showOverlayLayout()
         guard !delegate.active,!delegate.panel.isVisible,delegate.overlayPanel?.isVisible == false,
           delegate.strokeSamples.isEmpty,delegate.originalSelection==nil else {stop("FAIL: opening layout did not cancel/clear capture.");return}
         delegate.layoutPanel?.close()
-        print("PASS: overlay out-of-bounds retry, reactivation, layout-opening cancellation and capture clearing.")
+        print("PASS: no-match/out-of-range fresh contact retries without a button/idle callback; layout-opening cancels and clears capture.")
         activateOwned {overlayContactGuards()}
       }
-    }
   }
 }
 @MainActor func contactFrame(_ identifiers:[Int32]) {
@@ -183,19 +195,27 @@ import TrackpadBridge
   delegate.touchFrame(event)
 }
 @MainActor func overlayContactGuards() {
-  guard overlayStart(),let calibration=delegate.overlayFrame else {stop("FAIL: contact guard activation.");return}
+  let physical=NSMenuItem(title:"Trackpad Mode",action:nil,keyEquivalent:"");physical.representedObject=InputMode.trackpad.rawValue
+  delegate.chooseMode(physical);delegate.toggle()
+  if let listener=delegate.listener {OpenMTManager.shared().remove(listener);delegate.listener=nil}
+  contactFrame([1]);contactFrame([2])
+  guard delegate.active,delegate.waitForLift,delegate.finger==nil,delegate.strokeSamples.isEmpty else {stop("FAIL: changed physical contact did not reset stroke.");return}
+  frame(nil);contactFrame([1,2])
+  guard delegate.active,delegate.waitForLift,delegate.finger==nil,delegate.strokeSamples.isEmpty else {stop("FAIL: physical multi-contact did not reset stroke.");return}
+  delegate.cancel("Contact checks complete")
+  let screen=NSMenuItem(title:"Screen Overlay Mode",action:nil,keyEquivalent:"");screen.representedObject=InputMode.screenOverlay.rawValue
+  delegate.chooseMode(screen)
+  guard overlayStart(),let calibration=delegate.overlayFrame,delegate.listener==nil else {stop("FAIL: physical overlay activation unavailable.");return}
   moveCursor(calibration.screenPoint(Point(0.2,0.8))) {
-    contactFrame([1]);contactFrame([2])
-    guard delegate.active,delegate.waitForLift,delegate.finger==nil,delegate.strokeSamples.isEmpty else {stop("FAIL: changed contact did not reset overlay stroke.");return}
-    frame(nil);contactFrame([1,2])
-    guard delegate.active,delegate.waitForLift,delegate.finger==nil,delegate.strokeSamples.isEmpty else {stop("FAIL: multi-contact did not reset overlay stroke.");return}
-    frame(nil)
-    feedWithoutLift([Point(0.2,0.8),Point(0.4,0.5)]) {
+    contactFrame([1,2])
+    guard delegate.strokeSamples.isEmpty,delegate.waitForLift else {stop("FAIL: overlay multi-contact did not reset physical capture.");return}
+    frame(nil) // Retry after deliberate multi-contact requires a real all-fingers-up frame.
+    feedOverlay([Point(0.2,0.8),Point(0.4,0.5),Point(0.5,0.7)]) {
       let item=NSMenuItem(title:"Trackpad Mode",action:nil,keyEquivalent:"");item.representedObject=InputMode.trackpad.rawValue
       delegate.chooseMode(item)
       guard delegate.inputMode == .screenOverlay,delegate.strokeSource == .screenOverlay,
         delegate.strokeCalibration==calibration,delegate.validTarget() else {stop("FAIL: mode/calibration changed within active stroke.");return}
-      print("PASS: changed-contact/multi-contact reset and fresh idle gating; mode/calibration remain frozen during active overlay stroke.")
+      print("PASS: both modes register physical listener before fixture detachment; changed/multiple contacts reset; retry after lift works; mode/calibration frozen.")
       nativePolicyChecks() // Switching to this owned app must cancel the still-active overlay.
     }
   }

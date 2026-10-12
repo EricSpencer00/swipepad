@@ -17,6 +17,7 @@
 @property (assign, readonly) int deviceID;
 @property (assign, readonly) int frameID;
 @property (assign, readonly) double timestamp;
+@property (assign, readonly) double receivedAt;
 
 @end
 

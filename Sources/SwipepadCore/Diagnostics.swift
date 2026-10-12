@@ -27,24 +27,101 @@ public struct DoctorInput: Sendable {
   public var fieldSupported = false
   public var fieldRole: String? = nil
   public var fieldSubrole: FieldSubrole = .unreadable
-  public var selectedTextSettable = false
+  public var targetedInsertionSettable = false
   public var active = false
   public var focusPreserved: Bool? = nil
   public var insertionSucceeded: Bool? = nil
   public init() {}
 }
+public struct OutstandingWriteReport: Codable, Sendable {
+  public let pid:Int32
+  public let bundleIdentifier:String?
+  public let expectedCaret:Int
+  public let transactionID:String?
+  public let mutationAccepted:Bool?
+  public let caretAttemptPending:Bool?
+  public init(pid:Int32,bundleIdentifier:String?,expectedCaret:Int,transactionID:String?=nil,mutationAccepted:Bool?=nil,caretAttemptPending:Bool?=nil) {
+    self.pid=pid;self.bundleIdentifier=bundleIdentifier;self.expectedCaret=expectedCaret
+    self.transactionID=transactionID;self.mutationAccepted=mutationAccepted;self.caretAttemptPending=caretAttemptPending
+  }
+}
 public struct DoctorReport: Codable, Sendable {
+  public var outstandingWrites:[OutstandingWriteReport]? = nil
   public let schemaVersion: Int
   public let scope: String
   public let state: String
   public let checks: [DoctorCheck]
   public var runtimeIdentity: String? = nil
+  public var capture: CaptureDiagnostics? = nil
+  public init(schemaVersion:Int=1,scope:String,state:String,checks:[DoctorCheck]=[]) {
+    self.schemaVersion=schemaVersion;self.scope=scope;self.state=state;self.checks=checks
+  }
   public var text: String {
     "Swipepad — \(state)\n\(scope)\n" + (runtimeIdentity.map { $0 + "\n" } ?? "") + "\n"
+      + (capture.map { "Capture trial \($0.trial) · mode \($0.mode) · stage \($0.stage)\nCoordinates: normalized physical trackpad\nCallbacks \($0.callbacks) · active frames \($0.contactFrames) · idle frames \($0.idleFrames) · samples \($0.samples) · candidates \($0.candidates) · accepted words \($0.insertions)\nWords: recognized \($0.recognizedWords) · write attempts \($0.writeAttempts) · mutations accepted \($0.acceptedMutations) · confirmed \($0.insertions) · pending \($0.pendingWords) · rejected \($0.rejectedWords) · backend \($0.lastInsertionBackend ?? "none") · AX error \($0.lastAXError.map(String.init) ?? "none")\nInput: \($0.inputCapabilities ?? "not inspected") · target \($0.targetBundleIdentifier ?? "unknown") · focus \($0.focusLookupKind ?? "none") · retries \($0.focusPublicationRetries ?? 0)\nLast target refusal \($0.lastTargetRefusal ?? "none")\nFocus rejection \($0.focusRejection ?? "none") · last result \($0.result ?? "none")\n\n" } ?? "")
       + checks.map {
         "[\($0.status.rawValue.uppercased())] \($0.id): \($0.message)\nNext: \($0.repair)"
       }.joined(separator: "\n\n")
   }
+}
+/// Per-trial structural counters only: no words, key contents, field text or coordinates.
+public struct CaptureDiagnostics: Codable, Sendable {
+  public var firstTargetRefusal:String?
+  public var targetAttempts=0
+  public var targetAdmissions=0
+  public var targetApplicationPID:Int32?
+  public var targetBundleIdentifier:String?
+  public var focusLookupKind:String?
+  public var focusPublicationRetries:Int?
+  public var applicationFocusAXError:Int?
+  public var systemFocusAXError:Int?
+  public var confirmationIdentityMatches:Bool?
+  public var confirmationCaretMatches:Bool?
+  public var confirmationContentMatches:Bool?
+  public var confirmationBeforeContentMatches:Bool?
+  public var lastTargetRefusal:String?
+  public var releaseFrames=0
+  public var graceRejoins=0
+  public var graceCommits=0
+  public var liftGraceSeconds=0.0
+  public var droppedFrames=0
+  public var recognizedWords=0
+  public var rejectedWords=0
+  public var pendingWords=0
+  public var writeAttempts=0
+  public var acceptedMutations=0
+  public var contentReadable:Bool?
+  public var correctionResult:String?
+  public var lastInsertionBackend:String?
+  public var confirmationWaitMilliseconds=0.0
+  public var expectedCaret:Int?
+  public var observedCaretLocation:Int?
+  public var observedCaretLength:Int?
+  public var lastAXError:Int?
+  public var insertions=0
+  public var trial=0
+  public var mode="trackpad"
+  public var stage="off"
+  public var callbacks=0
+  public var contactFrames=0
+  public var idleFrames=0
+  public var states:[String:Int]=[:]
+  public var gateWaitFrames=0
+  public var samples=0
+  public var candidates=0
+  public var maximumCallbackDelayMilliseconds=0.0
+  public var axRequests=0
+  public var maximumAXMilliseconds=0.0
+  public var totalAXMilliseconds=0.0
+  public var resetReasons:[String:Int]=[:]
+  public var cancelReasons:[String:Int]=[:]
+  public var scrollEventsPassed=0
+  public var inputProtectionFailures=0
+  public var rejectionReasons:[String:Int]=[:]
+  public var inputCapabilities:String?
+  public var focusRejection:String?
+  public var result:String?
+  public init() {}
 }
 public enum Doctor {
   public static func evaluate(_ input: DoctorInput) -> DoctorReport {
@@ -121,7 +198,7 @@ public enum Doctor {
       input.touchSeen && input.liftSeen
         ? "A physical touch frame and lift were observed; word accuracy is not verified."
         : "A touch-and-lift cycle has not been observed in active mode.",
-      "Activate, lift all resting fingers first, then slide one finger and lift. Use Reset session if stuck waiting for lift; multi-finger contact discards the gesture. No capture runs outside active mode."
+      "Activate, slide one finger and lift to type a word. Use Reset session if stuck waiting for lift; multi-finger contact discards the gesture. No capture runs outside active mode."
     )
     let subrole: String
     switch input.fieldSubrole {
@@ -133,9 +210,9 @@ public enum Doctor {
       "field",
       input.fieldFound ? (input.fieldSupported && !input.secureInput ? .pass : .fail) : .waiting,
       input.fieldFound
-        ? "Role: \(input.fieldRole ?? "unknown"); \(subrole); selected-text writable: \(input.selectedTextSettable)."
+        ? "Role: \(input.fieldRole ?? "unknown"); \(subrole); targeted insertion available: \(input.targetedInsertionSettable)."
         : "No external focused field is available.",
-      "Focus an ordinary TextEdit or browser text area and Recheck. Missing optional subrole is allowed for AXTextArea only. Secure, read-only, single-line fields without safe metadata, and unsupported AX controls are refused; there is no automatic compatibility override."
+      "Focus an editable text field or composer and Recheck. Missing optional subrole is allowed for supported writable text controls. Secure, read-only, single-line fields without safe metadata, and unsupported AX controls are refused; there is no automatic compatibility override."
     )
     add(
       "focus", input.focusPreserved.map { $0 ? .pass : .fail } ?? .waiting,
@@ -150,11 +227,11 @@ public enum Doctor {
       "insertion", input.insertionSucceeded.map { $0 ? .pass : .fail } ?? .waiting,
       input.insertionSucceeded.map {
         $0
-          ? "Last explicit candidate selection returned AX success; visually verify the receiving document."
-          : "Last targeted selected-text write was rejected."
+          ? "Last word insertion returned AX success; visually verify the receiving document."
+          : "Last insertion could not be confirmed; check the receiving field."
       }
-        ?? "No candidate insertion has been attempted; writable metadata is not end-to-end success.",
-      "In a disposable text area, complete a physical swipe and explicitly click the intended candidate, then visually verify it. If AX rejects the write, use a supported ordinary field; no clipboard or broadcast typing fallback is used."
+        ?? "No word insertion has been attempted; writable metadata is not end-to-end success.",
+      "In a disposable text area, complete a physical swipe, lift to commit, then visually verify it. If AX rejects the write, use a supported ordinary field; no clipboard or broadcast typing fallback is used."
     )
     let setup =
       !input.bundled || !input.identityMatches || !input.signatureValid || !input.accessibility
