@@ -646,3 +646,49 @@ func tuneScore(_ words: [String]) -> Double {
 }
 print(String(format: "TUNE train=%.4f val=%.4f words=%d/%d", tuneScore(tuneTrain), tuneScore(tuneVal), tuneTrain.count, tuneVal.count))
 }
+
+// MARK: Roll jumps (red first): a contact centroid that spikes and snaps back must not hook the trail or the recognizer.
+do {
+  // Steady swipe, one step every 10 ms; a single sample jumps up 0.2 and returns on the next frame.
+  var f = ContactJumpFilter()
+  var accepted: [Point] = []
+  let steady = (0..<12).map { Point(0.9 - Double($0) * 0.05, 0.1 + Double($0) * 0.04) }
+  for (i, p) in steady.enumerated() {
+    let spiked = i == 6 ? Point(p.x, p.y + 0.2) : p
+    if f.accept(spiked, time: Double(i) * 0.01) { accepted.append(spiked) }
+  }
+  check(!accepted.contains(Point(0.6, 0.54)), "roll spike is not drawn or scored")
+  check(accepted.count >= steady.count - 1, "only the spike is dropped, the swipe is kept")
+
+  // A genuinely fast flick keeps its samples: consecutive large steps confirm each other.
+  var g = ContactJumpFilter()
+  var flick: [Point] = []
+  for i in 0..<6 {
+    let p = Point(0.9 - Double(i) * 0.12, 0.1 + Double(i) * 0.12)
+    if g.accept(p, time: Double(i) * 0.01) { flick.append(p) }
+  }
+  check(flick.count == 6, "a real fast flick keeps every sample")
+
+  // A sustained shift (two samples at the new place) is real movement, not a spike.
+  var h = ContactJumpFilter()
+  var shifted: [Point] = []
+  let path = [Point(0.2, 0.2), Point(0.22, 0.22), Point(0.24, 0.24), Point(0.6, 0.6), Point(0.61, 0.61), Point(0.62, 0.62)]
+  for (i, p) in path.enumerated() where h.accept(p, time: Double(i) * 0.01) { shifted.append(p) }
+  check(shifted.contains(Point(0.61, 0.61)) && shifted.contains(Point(0.62, 0.62)), "a sustained shift is kept")
+}
+// Recognition with a roll spike in the middle of a bottom-right to top-left swipe still finds the word.
+do {
+  let rollWords = ["mouse", "zebra", "hover", "quiet", "power"]
+  var hits = 0
+  for word in rollWords {
+    var path = Keyboard.path(word)
+    let mid = path.count / 2
+    path[mid] = Point(path[mid].x, min(path[mid].y + 0.18, 1))
+    var filter = ContactJumpFilter()
+    var kept: [Point] = []
+    for (i, p) in path.enumerated() where filter.accept(p, time: Double(i) * 0.01) { kept.append(p) }
+    if rankedWords(keyboardStroke(kept)).prefix(3).contains(word) { hits += 1 }
+  }
+  check(hits == rollWords.count, "customer: roll spike filtered, bottom-right swipes still type (\(hits)/\(rollWords.count))")
+}
+print("Passed \(count) checks including roll-jump filtering.")

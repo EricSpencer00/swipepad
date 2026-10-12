@@ -26,6 +26,7 @@ final class GuidePanel: NSPanel {
   var overlayFrame:CalibrationRect?
   var strokeCalibration:CalibrationRect?
   var strokeSamples:[StrokeSample]=[]
+  var jumpFilter=ContactJumpFilter() // drops roll spikes before they reach the trail or recognition
   var strokeSource:InputMode = .trackpad
   var activationScreen:NSScreen?
   var layoutPanel:NSWindow?
@@ -421,7 +422,7 @@ final class GuidePanel: NSPanel {
     touchSeen=false;liftSeen=false
     frameOrdering.reset(receivedAfter:ProcessInfo.processInfo.systemUptime)
     path = []
-    strokeSamples=[];strokeSource=inputMode;strokeCalibration=nil
+    strokeSamples=[];jumpFilter=ContactJumpFilter();strokeSource=inputMode;strokeCalibration=nil
     finger = nil
     captureDiagnostics.stage="ready"
     guard OpenMTManager.systemSupportsMultitouch() else {
@@ -586,7 +587,7 @@ final class GuidePanel: NSPanel {
       guard acquireTarget() else {waitForLift=true;return}
       statusReason=nil
       strokeActualContact=false
-      finger=touch.id;path=[];strokeSamples=[];strokeCalibration=overlayFrame
+      finger=touch.id;path=[];strokeSamples=[];jumpFilter=ContactJumpFilter();strokeCalibration=overlayFrame
       strokeToken += 1;bounceCount=0;missingSeconds=0
     }
     if touch.state == .making || touch.state == .touching {strokeActualContact=true;touchSeen=true}
@@ -702,6 +703,7 @@ final class GuidePanel: NSPanel {
   }
   func appendSample(_ point:Point,time:Double,phase:ContactPhase,sourcePoint:Point? = nil) {
     guard strokeSamples.count<4096 else {cancel("Stroke too long; cancelled");return}
+    guard jumpFilter.accept(point,time:time) else {captureDiagnostics.rollSpikes += 1;return}
     strokeSamples.append(StrokeSample(point,time:time,phase:phase,source:strokeSource,sourcePoint:sourcePoint))
     captureDiagnostics.samples=strokeSamples.count
     path.append(point) // Identical contacts and recognition for both guide presentations.
@@ -713,7 +715,7 @@ final class GuidePanel: NSPanel {
   func prepareNextStroke(preserveTrail:Bool=false) {
     deferredLift=nil;liftTimerGeneration += 1;bounceCount=0;missingSeconds=0
     if !pending && queuedWords.isEmpty {target=nil;originalSelection=nil;originalContentDigest=nil}
-    strokeFreshContact=false;strokeActualContact=false;contactGate.rearm();path=[];strokeSamples=[];finger=nil;strokeCalibration=nil
+    strokeFreshContact=false;strokeActualContact=false;contactGate.rearm();path=[];strokeSamples=[];jumpFilter=ContactJumpFilter();finger=nil;strokeCalibration=nil
     captureDiagnostics.samples=0;captureDiagnostics.candidates=0;captureDiagnostics.stage="ready"
     buttons.forEach {$0.isHidden=true};if !preserveTrail {renderStroke()}
   }
@@ -1060,7 +1062,7 @@ final class GuidePanel: NSPanel {
     if retained==nil {buttons.forEach {$0.title="";$0.isHidden=true}}
     panel?.orderOut(nil)
     overlayPanel?.orderOut(nil);overlayKeyboard.path=[];overlayKeyboard.needsDisplay=true
-    strokeSamples=[];strokeCalibration=nil;overlayFrame=nil
+    strokeSamples=[];jumpFilter=ContactJumpFilter();strokeCalibration=nil;overlayFrame=nil
     activationScreen=nil
     updateModeIndicator()
     status?.button?.toolTip = reason

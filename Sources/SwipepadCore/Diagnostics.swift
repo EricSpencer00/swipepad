@@ -85,6 +85,7 @@ public struct CaptureDiagnostics: Codable, Sendable {
   public var graceCommits=0
   public var liftGraceSeconds=0.0
   public var droppedFrames=0
+  public var rollSpikes=0
   public var recognizedWords=0
   public var rejectedWords=0
   public var pendingWords=0
