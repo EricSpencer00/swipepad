@@ -692,3 +692,21 @@ do {
   check(hits == rollWords.count, "customer: roll spike filtered, bottom-right swipes still type (\(hits)/\(rollWords.count))")
 }
 print("Passed \(count) checks including roll-jump filtering.")
+
+// MARK: Pad area (red first): use only part of the trackpad as the keyboard; contacts outside are ignored.
+do {
+  check(PadRegion.full.map(keyboardStroke(Keyboard.path("hello"))) == keyboardStroke(Keyboard.path("hello")), "full pad area leaves contacts unchanged")
+  let phone = PadRegion.iPhoneSized
+  check(phone.contains(Point(0.5, 0.3)) && !phone.contains(Point(0.05, 0.9)), "iPhone-sized area ignores contacts outside it")
+  check(phone.toRegion(Point(phone.minX, phone.minY)).distance(Point(0, 0)) < 1e-9 && phone.toRegion(Point(phone.maxX, phone.maxY)).distance(Point(1, 1)) < 1e-9, "area corners map to keyboard corners")
+  let phoneAspect = (phone.spanY / phone.spanX) / PadRegion.trackpadWidthToHeight
+  check(abs(phoneAspect - 0.5) < 0.02, "iPhone-sized area has a phone keyboard proportion (\(phoneAspect))")
+  check(PadRegion(stored: phone.stored) == phone, "pad area round-trips through storage")
+  check(PadRegion(stored: [0, 0, 0.001, 0.001]).spanX >= PadRegion.minimumSpan, "pad area enforces a minimum size")
+  // Typing through a smaller area still recognizes the word.
+  for word in ["hello", "water", "quiet"] {
+    let inArea = Keyboard.path(word).map { Point(phone.minX + $0.x * phone.spanX, phone.minY + $0.y * phone.spanY) }
+    check(rankedWords(phone.map(keyboardStroke(inArea))).prefix(3).contains(word), "customer: swipe in the iPhone-sized area types \(word)")
+  }
+}
+print("Passed \(count) checks including pad areas.")

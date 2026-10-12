@@ -2,7 +2,7 @@ import Foundation
 
 /// Conservative reconnection of an interrupted moving stroke; no generated points.
 public enum LiftGrace {
-  public static let defaultSeconds=0.22
+  public static let defaultSeconds = 0.10
   public static let maximumBounces=3
   public static let maximumMissingSeconds=0.30
   public static func nearby(_ samples:[StrokeSample],point:Point,elapsed:Double,idChanged:Bool,bounces:Int,missing:Double,grace:Double)->Bool {
