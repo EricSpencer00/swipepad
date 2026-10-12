@@ -38,6 +38,32 @@ public struct KeyboardViewport: Equatable, Sendable {
   public func contains(_ key: Point) -> Bool {
     (minX...maxX).contains(key.x) && (minY...maxY).contains(key.y)
   }
+  public enum Edge: Sendable, Equatable { case left, right, bottom, top }
+  /// The crop edge nearest `p` within `tolerance` (keyboard units), if the pointer is alongside it.
+  public func edge(at p: Point, tolerance: Double) -> Edge? {
+    let alongY = p.y >= minY - tolerance && p.y <= maxY + tolerance
+    let alongX = p.x >= minX - tolerance && p.x <= maxX + tolerance
+    let options: [(Edge, Double)] = [
+      (.left, abs(p.x - minX)), (.right, abs(p.x - maxX)), (.bottom, abs(p.y - minY)), (.top, abs(p.y - maxY)),
+    ]
+    return options.filter { edge, distance in
+      guard distance <= tolerance else { return false }
+      switch edge {
+      case .left, .right: return alongY
+      case .bottom, .top: return alongX
+      }
+    }.min { $0.1 < $1.1 }?.0
+  }
+  /// The viewport after dragging one edge to `value`, never crossing the opposite edge
+  /// or leaving the keyboard.
+  public func dragging(_ edge: Edge, to value: Double) -> KeyboardViewport {
+    switch edge {
+    case .left: return KeyboardViewport(minX: min(max(value, 0), maxX - Self.minimumSpan), minY: minY, maxX: maxX, maxY: maxY)
+    case .right: return KeyboardViewport(minX: minX, minY: minY, maxX: max(min(value, 1), minX + Self.minimumSpan), maxY: maxY)
+    case .bottom: return KeyboardViewport(minX: minX, minY: min(max(value, 0), maxY - Self.minimumSpan), maxX: maxX, maxY: maxY)
+    case .top: return KeyboardViewport(minX: minX, minY: minY, maxX: maxX, maxY: max(min(value, 1), minY + Self.minimumSpan))
+    }
+  }
   /// Maps every sample into keyboard space. Time, phase, source and raw source points are kept.
   public func map(_ samples: [StrokeSample]) -> [StrokeSample] {
     guard !isFull else { return samples }

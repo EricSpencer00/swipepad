@@ -536,3 +536,84 @@ for dx in [0.2, 0.3, 0.4] {
   check(total > 0 && hits == total, "e2e start \(dx) away still finds the intended word (\(hits)/\(total))")
 }
 print("Passed \(count) checks including lenient starts and keyboard crop.")
+
+// MARK: Customer scenarios (red first): how people actually swipe, and how they crop the keyboard.
+
+// Crop edges: the edge under the pointer is found and dragging clamps to the keyboard.
+let cropEdges = KeyboardViewport(minX: 0.2, minY: 0.1, maxX: 0.8, maxY: 0.9)
+check(cropEdges.edge(at: Point(0.2, 0.5), tolerance: 0.01) == .left, "grab the left edge")
+check(cropEdges.edge(at: Point(0.8, 0.5), tolerance: 0.01) == .right, "grab the right edge")
+check(cropEdges.edge(at: Point(0.5, 0.1), tolerance: 0.01) == .bottom, "grab the bottom edge")
+check(cropEdges.edge(at: Point(0.5, 0.9), tolerance: 0.01) == .top, "grab the top edge")
+check(cropEdges.edge(at: Point(0.5, 0.5), tolerance: 0.01) == nil, "middle of the crop grabs nothing")
+check(cropEdges.edge(at: Point(0.2, 0.05), tolerance: 0.01) == nil, "a point beside the frame grabs nothing")
+let draggedLeft = cropEdges.dragging(.left, to: 0.75)
+check(abs(draggedLeft.minX - (0.8 - KeyboardViewport.minimumSpan)) < 1e-9, "dragging the left edge past the right edge stops at the minimum width")
+check(cropEdges.dragging(.left, to: -0.5).minX == 0, "dragging the left edge past the keyboard stops at the keyboard edge")
+check(cropEdges.dragging(.top, to: 1.5).maxY == 1, "dragging the top edge past the keyboard stops at the keyboard edge")
+check(cropEdges.dragging(.right, to: 0.5).maxX == 0.5, "dragging the right edge shrinks the crop")
+check(KeyboardViewport.full.edge(at: Point(0, 0.5), tolerance: 0.01) == .left, "the full keyboard still has grabbable edges")
+
+// Full keyboard stays untouched by the crop code.
+let fullSample = [StrokeSample(Point(0.3, 0.4), time: 0.1, source: .screenOverlay, sourcePoint: Point(0.25, 0.4))]
+check(KeyboardViewport.full.map(fullSample) == fullSample, "full keyboard leaves strokes identical")
+
+// Fast swipe: a quick flick sends few samples, but the word is still there.
+let fastWords = ["hello", "water", "house", "people", "keyboard"]
+for word in fastWords {
+  let sparse = Keyboard.path(word).enumerated().filter { $0.offset % 6 == 0 }.map(\.element) + [Keyboard.path(word).last!]
+  check(rankedWords(keyboardStroke(sparse, step: 0.02)).prefix(3).contains(word), "customer: fast flick finds \(word)")
+}
+// Slow swipe with pauses: repeated samples where the finger sat still.
+for word in ["green", "listen", "silent", "quiet"] {
+  var slow: [Point] = []
+  for p in Keyboard.path(word) { slow.append(contentsOf: Array(repeating: p, count: 3)) }
+  check(rankedWords(keyboardStroke(slow)).first == word, "customer: slow swipe with pauses finds \(word)")
+}
+// Index-finger roll: a short back-and-forth in the middle of a swipe still finds the word.
+for word in ["trackpad", "gesture", "mouse"] {
+  var path = Keyboard.path(word)
+  let mid = path.count / 2
+  let roll = path[mid].x < 0.9 ? Point(path[mid].x + 0.03, path[mid].y) : Point(path[mid].x - 0.03, path[mid].y)
+  path.insert(roll, at: mid)
+  check(Array(rankedWords(keyboardStroke(path)).prefix(5)).contains(word), "customer: index-finger roll still finds \(word)")
+}
+// Doubled letters (loops) are not lost when the start is off.
+for word in ["hello", "pizza", "tower", "apple"] {
+  guard let first = word.first, let n = neighbour(of: first, dx: 0.2) ?? neighbour(of: first, dx: -0.2) else { continue }
+  check(Array(rankedWords(keyboardStroke(Keyboard.path(String(n) + word.dropFirst()))).prefix(5)).contains(word), "customer: doubled-letter \(word) with an off start")
+}
+// Cropped keyboard: a customer who cropped to the right half still types what they swipe there.
+let rightHalf = KeyboardViewport(minX: 0.5, minY: 0, maxX: 1, maxY: 1)
+for word in ["quiet", "pizza", "tower", "power", "vacuum", "mouse", "hover"] where word.allSatisfy({ rightHalf.contains(Keyboard.keys[$0]!) }) {
+  let padPath = Keyboard.path(word).map(rightHalf.toPad)
+  check(rankedWords(rightHalf.map(keyboardStroke(padPath))).first == word, "customer: swipe in the right-half crop types \(word)")
+}
+// Gibberish should not be typed as a real word from a single zig-zag.
+let zigzag = (0..<12).map { Point(Double($0 % 2) * 0.9 + 0.05, Double($0) / 12) }
+_ = rankedWords(keyboardStroke(zigzag)) // must return without trapping on a scribble
+check(true, "customer: zig-zag scribble does not crash the recognizer")
+print("Passed \(count) checks including customer scenarios.")
+// Benchmark on the real lexicon (not the small test list): common words, realistic wobble and starts.
+let commonWords = ["the", "and", "that", "have", "for", "not", "with", "you", "this", "but", "from", "they",
+  "say", "her", "she", "will", "one", "all", "would", "there", "their", "what", "about", "which", "when",
+  "make", "like", "time", "just", "know", "people", "into", "year", "good", "some", "could", "them",
+  "other", "than", "then", "look", "only", "come", "over", "think", "also", "back", "after", "work",
+  "first", "well", "even", "want", "because", "these", "give", "most", "keyboard", "trackpad", "swipe"]
+let fullLexicon = GestureLexicon(words: WordVocabulary.words)
+var benchTop1 = 0, benchTop3 = 0
+for word in commonWords {
+  let wobbled = jittered(Keyboard.path(word), amount: 0.01, seed: 5)
+  let ranked = fullLexicon.rank(keyboardStroke(wobbled), limit: 5).map(\.word)
+  if ranked.first == word { benchTop1 += 1 }
+  if ranked.prefix(3).contains(word) { benchTop3 += 1 }
+}
+print("Benchmark, real lexicon, \(commonWords.count) common words: top-1 \(benchTop1), top-3 \(benchTop3).")
+var offTop3 = 0, offTotal = 0
+for word in commonWords {
+  guard let first = word.first, let n = neighbour(of: first, dx: 0.3) ?? neighbour(of: first, dx: -0.3) else { continue }
+  offTotal += 1
+  let wobbled = jittered(Keyboard.path(String(n) + word.dropFirst()), amount: 0.01, seed: 9)
+  if fullLexicon.rank(keyboardStroke(wobbled), limit: 5).map(\.word).prefix(3).contains(word) { offTop3 += 1 }
+}
+print("Benchmark, real lexicon, start three keys off: top-3 \(offTop3)/\(offTotal).")

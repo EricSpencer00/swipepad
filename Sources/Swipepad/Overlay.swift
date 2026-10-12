@@ -3,14 +3,13 @@ import ApplicationServices
 import SwipepadCore
 
 @MainActor class OverlayKeyboardView: NSView {
-  enum Edge {case left,right,bottom,top}
   var path:[Point]=[]
   var opacity:CGFloat=0.55
   /// The part of the keyboard shown. Visible keys are stretched to fill the canvas.
   var viewport:KeyboardViewport = .full { didSet {needsDisplay=true} }
   /// Layout preview only: draws the whole keyboard with a crop frame whose edges can be dragged.
   var editable=false
-  private var dragEdge:Edge?
+  private var dragEdge:KeyboardViewport.Edge?
   override func acceptsFirstMouse(for event:NSEvent?) -> Bool {true}
   override func mouseDown(with event:NSEvent) {
     guard editable else {return} // Absorb clicks; physical contacts determine letters.
@@ -18,15 +17,8 @@ import SwipepadCore
   }
   override func mouseDragged(with event:NSEvent) {
     guard editable,let edge=dragEdge else {return}
-    let p=keyboardPoint(event),v=viewport,m=KeyboardViewport.minimumSpan
-    let next:KeyboardViewport
-    switch edge {
-    case .left: next=KeyboardViewport(minX:min(max(p.x,0),v.maxX-m),minY:v.minY,maxX:v.maxX,maxY:v.maxY)
-    case .right: next=KeyboardViewport(minX:v.minX,minY:v.minY,maxX:max(min(p.x,1),v.minX+m),maxY:v.maxY)
-    case .bottom: next=KeyboardViewport(minX:v.minX,minY:min(max(p.y,0),v.maxY-m),maxX:v.maxX,maxY:v.maxY)
-    case .top: next=KeyboardViewport(minX:v.minX,minY:v.minY,maxX:v.maxX,maxY:max(min(p.y,1),v.minY+m))
-    }
-    viewport=next
+    let p=keyboardPoint(event)
+    viewport=viewport.dragging(edge,to:edge == .left || edge == .right ? p.x : p.y)
   }
   override func mouseUp(with event:NSEvent) {dragEdge=nil}
   func keyboardPoint(_ event:NSEvent) -> Point {
@@ -34,19 +26,8 @@ import SwipepadCore
     return Point(Double(l.x/max(bounds.width,1)),Double(l.y/max(bounds.height,1)))
   }
   /// Edge of the crop frame under the pointer, within 12 points.
-  func nearestEdge(_ p:Point) -> Edge? {
-    let v=viewport,tolerance=12.0
-    let candidates:[(Edge,Double)] = [
-      (.left,abs(p.x-v.minX)*bounds.width),(.right,abs(p.x-v.maxX)*bounds.width),
-      (.bottom,abs(p.y-v.minY)*bounds.height),(.top,abs(p.y-v.maxY)*bounds.height)]
-    let alongY=p.y >= v.minY-0.05 && p.y <= v.maxY+0.05, alongX=p.x >= v.minX-0.05 && p.x <= v.maxX+0.05
-    return candidates.filter {edge,distance in
-      guard distance <= tolerance else {return false}
-      switch edge {
-      case .left,.right: return alongY
-      case .bottom,.top: return alongX
-      }
-    }.min {$0.1 < $1.1}?.0
+  func nearestEdge(_ p:Point) -> KeyboardViewport.Edge? {
+    viewport.edge(at:p,tolerance:12/max(1,min(bounds.width,bounds.height)))
   }
   override func draw(_ dirtyRect:NSRect) {
     let workspace=NSWorkspace.shared
