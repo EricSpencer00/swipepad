@@ -33,7 +33,7 @@ struct RuntimeHealth:Codable {
   }
   func outstandingWriteReports()->[OutstandingWriteReport] {
     carriedWriteGuards + unresolvedWrites.map {write in
-      OutstandingWriteReport(pid:write.pid,bundleIdentifier:NSRunningApplication(processIdentifier:write.pid)?.bundleIdentifier,expectedCaret:write.expectedCaret,transactionID:write.id.uuidString,mutationAccepted:write.mutationAccepted,caretAttemptPending:write.deferredCaret)
+      OutstandingWriteReport(pid:write.pid,bundleIdentifier:write.originalBundleIdentifier,expectedCaret:write.expectedCaret,transactionID:write.id.uuidString,mutationAccepted:write.mutationAccepted,caretAttemptPending:write.deferredCaret)
     }
   }
   // Snapshot stored state only: no AX, signature validation, reconciliation or writes.

@@ -79,6 +79,13 @@ final class MemoryInput:AppDelegate {
   var richTextSpaceReflow=false
   var afterPostedText:((String)->Void)?
   var trackingPersistenceSucceeds=true
+  var reviewDecision=false
+  var reviewPromptCount=0
+  var reviewedRecord:OutstandingWriteReport?
+  var beforeReviewDecision:(()->Void)?
+  override func confirmWriteReview(_ selection:WriteReviewSelection)->Bool {
+    reviewPromptCount += 1;reviewedRecord=selection.record;beforeReviewDecision?();return reviewDecision
+  }
   override func persistWriteTracking()->Bool {trackingPersistenceSucceeds}
   override var runtimeSignatureValid:Bool {simulatedRuntimeSignatureValid}
   override var secureInputActive:Bool {simulatedSecureInput}
@@ -843,6 +850,73 @@ check(storageFailed.attributeNamesSet.isEmpty && storageFailed.postedTextPIDs.is
 storageFailed.cancel("OFF")
 print("PASS restart guard and durability port; total \(checks)")
 
+let reviewA=OutstandingWriteReport(pid:40001,bundleIdentifier:"com.example.first",expectedCaret:2,transactionID:UUID().uuidString,mutationAccepted:true,caretAttemptPending:false)
+let reviewB=OutstandingWriteReport(pid:40002,bundleIdentifier:"com.example.second",expectedCaret:3,transactionID:UUID().uuidString,mutationAccepted:false,caretAttemptPending:false)
+let reviewC=OutstandingWriteReport(pid:40003,bundleIdentifier:"com.example.third",expectedCaret:4,transactionID:UUID().uuidString,mutationAccepted:false,caretAttemptPending:false)
+func reviewFixture()->(MemoryInput,NSMenu) {
+ let owner=MemoryInput(),menu=NSMenu();owner.carriedWriteGuards=[reviewA,reviewB];owner.writeReviewMenu=menu;owner.populateWriteReviewMenu(menu);return (owner,menu)
+}
+func row(_ menu:NSMenu,_ record:OutstandingWriteReport)->NSMenuItem {menu.items.first {($0.representedObject as? AppDelegate.WriteReviewSelection)?.record.transactionID==record.transactionID}!}
+let (specificReview,specificMenu)=reviewFixture()
+check(specificMenu.items.count==2 && specificMenu.items.allSatisfy(\.isEnabled),"each protected write has its own selectable native menu row")
+let secondRow=row(specificMenu,reviewB)
+check(secondRow.title.contains("com.example.second") && secondRow.title.contains("40002") && secondRow.toolTip?.contains(reviewB.transactionID!)==true,"selected menu row identifies its own original app, process and complete record")
+specificReview.reviewWriteTracking(secondRow)
+check(specificReview.reviewPromptCount==1 && specificReview.reviewedRecord?.transactionID==reviewB.transactionID && specificReview.carriedWriteGuards.count==2,"Keep protection is the default decision and cannot clear either record")
+specificReview.reviewDecision=true;specificReview.reviewWriteTracking(secondRow)
+check(specificReview.carriedWriteGuards.map(\.transactionID)==[reviewA.transactionID] && specificReview.reviewedRecord?.transactionID==reviewB.transactionID,"explicit second-record review clears only that record and preserves the first")
+check(specificReview.postedTextPIDs.isEmpty && specificReview.attributeNamesSet.isEmpty && specificReview.metadataReads==0 && specificReview.captureDiagnostics.writeAttempts==0,"record review does not query fields, dispatch text or change any draft")
+let afterClearPrompts=specificReview.reviewPromptCount;specificReview.reviewWriteTracking(secondRow)
+check(specificReview.reviewPromptCount==afterClearPrompts && specificReview.carriedWriteGuards.map(\.transactionID)==[reviewA.transactionID],"repeated retired menu action cannot substitute the remaining first record")
+
+let (refreshedReview,refreshedMenu)=reviewFixture();let obsoleteRow=row(refreshedMenu,reviewB)
+refreshedReview.menuNeedsUpdate(refreshedMenu);refreshedReview.reviewDecision=true;refreshedReview.reviewWriteTracking(obsoleteRow)
+check(refreshedReview.reviewPromptCount==0 && refreshedReview.carriedWriteGuards.count==2,"menu refresh invalidates old represented selections even when the record IDs remain")
+let activeRow=row(refreshedMenu,reviewB);refreshedReview.active=true;refreshedReview.reviewWriteTracking(activeRow)
+check(!refreshedReview.validateMenuItem(activeRow) && refreshedReview.reviewPromptCount==0 && refreshedReview.carriedWriteGuards.count==2,"active capture refuses review and preserves all records")
+refreshedReview.active=false
+
+let (changedReview,changedMenu)=reviewFixture();let changedRow=row(changedMenu,reviewB)
+changedReview.carriedWriteGuards[1]=OutstandingWriteReport(pid:reviewB.pid,bundleIdentifier:reviewB.bundleIdentifier,expectedCaret:99,transactionID:reviewB.transactionID,mutationAccepted:reviewB.mutationAccepted,caretAttemptPending:false)
+changedReview.reviewDecision=true;changedReview.reviewWriteTracking(changedRow)
+check(changedReview.reviewPromptCount==0 && changedReview.carriedWriteGuards.count==2,"changed caret metadata invalidates a stale record before confirmation")
+
+let (modalReview,modalMenu)=reviewFixture();let modalRow=row(modalMenu,reviewB)
+modalReview.reviewDecision=true;modalReview.beforeReviewDecision={modalReview.carriedWriteGuards.removeAll {$0.transactionID==reviewB.transactionID}}
+modalReview.reviewWriteTracking(modalRow)
+check(modalReview.carriedWriteGuards.map(\.transactionID)==[reviewA.transactionID],"record resolving during the modal loop never redirects an accepted decision to another record")
+let (replacedReview,replacedMenu)=reviewFixture();let replacedRow=row(replacedMenu,reviewB)
+replacedReview.reviewDecision=true;replacedReview.beforeReviewDecision={replacedReview.carriedWriteGuards[1]=OutstandingWriteReport(pid:reviewC.pid,bundleIdentifier:reviewC.bundleIdentifier,expectedCaret:reviewC.expectedCaret,transactionID:reviewB.transactionID,mutationAccepted:false,caretAttemptPending:false)}
+replacedReview.reviewWriteTracking(replacedRow)
+check(replacedReview.carriedWriteGuards.count==2 && replacedReview.carriedWriteGuards[1].pid==reviewC.pid,"changed process/bundle under the same record ID fails post-confirmation identity validation")
+let (ackReview,ackMenu)=reviewFixture();let ackRow=row(ackMenu,reviewB)
+ackReview.reviewDecision=true;ackReview.beforeReviewDecision={ackReview.carriedWriteGuards[1]=OutstandingWriteReport(pid:reviewB.pid,bundleIdentifier:reviewB.bundleIdentifier,expectedCaret:reviewB.expectedCaret,transactionID:reviewB.transactionID,mutationAccepted:true,caretAttemptPending:true)};ackReview.reviewWriteTracking(ackRow)
+check(ackReview.carriedWriteGuards.count==2 && ackReview.carriedWriteGuards[1].mutationAccepted==true,"acknowledgement/caret-attempt changes during confirmation invalidate its old snapshot")
+let (activatedReview,activatedMenu)=reviewFixture();activatedReview.reviewDecision=true;activatedReview.beforeReviewDecision={activatedReview.active=true};activatedReview.reviewWriteTracking(row(activatedMenu,reviewB))
+check(activatedReview.carriedWriteGuards.count==2,"capture starting during confirmation refuses clearing and preserves all protection")
+
+let (addedReview,addedMenu)=reviewFixture();let addedRow=row(addedMenu,reviewB)
+addedReview.reviewDecision=true;addedReview.beforeReviewDecision={addedReview.carriedWriteGuards.append(reviewC)};addedReview.reviewWriteTracking(addedRow)
+check(addedReview.carriedWriteGuards.map(\.transactionID)==[reviewA.transactionID,reviewC.transactionID],"new unrelated records survive an explicitly confirmed per-record action")
+let (failedReview,failedMenu)=reviewFixture();failedReview.reviewDecision=true;failedReview.trackingPersistenceSucceeds=false;failedReview.reviewWriteTracking(row(failedMenu,reviewB))
+check(failedReview.carriedWriteGuards.map(\.transactionID)==[reviewA.transactionID,reviewB.transactionID] && !failedReview.writeTrackingReadable,"persistence failure restores in-memory records and blocks further writing")
+
+let (duplicateReview,duplicateMenu)=reviewFixture();duplicateReview.carriedWriteGuards.append(reviewB);duplicateReview.populateWriteReviewMenu(duplicateMenu)
+let duplicateRow=row(duplicateMenu,reviewB);duplicateReview.reviewDecision=true;duplicateReview.reviewWriteTracking(duplicateRow)
+check(!duplicateRow.isEnabled && duplicateReview.reviewPromptCount==0 && duplicateReview.carriedWriteGuards.count==3,"duplicate transaction identities are unselectable rather than clearing ambiguous records")
+let unknownRow=NSMenuItem(title:"unknown",action:nil,keyEquivalent:"");unknownRow.representedObject=UUID().uuidString;specificReview.reviewWriteTracking(unknownRow)
+check(specificReview.carriedWriteGuards.map(\.transactionID)==[reviewA.transactionID],"malformed menu payload cannot fall back to first-record clearing")
+
+let liveRecordReview=MemoryInput();liveRecordReview.carriedWriteGuards=[reviewA];liveRecordReview.pid=40002;liveRecordReview.chosenField=liveRecordReview.ownedField
+liveRecordReview.activate();liveRecordReview.insertionTransport = .keyboard;liveRecordReview.acknowledgePostedTextWithoutEditing=true;word(liveRecordReview,"cat");liveRecordReview.cancel("OFF")
+let liveRecordID=liveRecordReview.unresolvedWrites[0].id.uuidString,liveRecordMenu=NSMenu();liveRecordReview.populateWriteReviewMenu(liveRecordMenu)
+let liveRecordRow=liveRecordMenu.items.first {($0.representedObject as? AppDelegate.WriteReviewSelection)?.record.transactionID==liveRecordID}!
+let liveAttempts=liveRecordReview.captureDiagnostics.writeAttempts;liveRecordReview.reviewDecision=true;liveRecordReview.reviewWriteTracking(liveRecordRow)
+check(liveRecordReview.unresolvedWrites.isEmpty && liveRecordReview.carriedWriteGuards.map(\.transactionID)==[reviewA.transactionID] && liveRecordReview.captureDiagnostics.writeAttempts==liveAttempts,"volatile selected write can be reviewed without touching unrelated carried protection or repeating its mutation")
+let originalIdentity=MemoryInput();originalIdentity.unresolvedWrites=[AppDelegate.UnresolvedWrite(id:UUID(),field:originalIdentity.ownedField,pid:40001,originalRange:CFRange(location:0,length:0),beforeDigest:nil,expectedCaret:4,expectedDigest:nil,originalBundleIdentifier:"com.example.original")]
+check(originalIdentity.outstandingWriteReports()[0].bundleIdentifier=="com.example.original","volatile record identity retains its captured original bundle rather than deriving it from a later PID lookup")
+print("PASS per-record native menu actions and confirmation races; total \(checks)")
+
 let rich=MemoryInput();rich.activate();rich.insertionTransport = .keyboard;rich.richTextSpaceReflow=true
 for _ in 0..<3 {for w in ["cat","world","auto"] {word(rich,w)}}
 let richExpected=String(repeating:"cat world auto ",count:3)
@@ -880,3 +954,14 @@ pendingFeedback.cancel("OFF")
 let staleSuggestion=MemoryInput();staleSuggestion.activate();staleSuggestion.gestureLexicon=GestureLexicon(words:["cat","catt"],usePrior:false);word(staleSuggestion,"cat");staleSuggestion.cancel("OFF");staleSuggestion.pid=40002;staleSuggestion.insertSuggestion("cat")
 check(staleSuggestion.captureDiagnostics.feedbackKind=="suggestionRefused" && staleSuggestion.captureDiagnostics.writeAttempts==0 && staleSuggestion.postedTextPIDs.isEmpty,"stale suggestion cannot write after application switch and explains refusal")
 print("PASS every-swipe feedback and explicit choice guards; total \(checks)")
+
+// Exercise AppKit's action routing without opening a menu, modal dialog or window.
+// The confirmation port is explicit test approval; production still uses NSAlert.
+let menuForegroundBefore=NSWorkspace.shared.frontmostApplication?.processIdentifier
+let menuApplication=NSApplication.shared;menuApplication.setActivationPolicy(.prohibited)
+let (routedReview,routedMenu)=reviewFixture();routedReview.reviewDecision=true
+routedMenu.performActionForItem(at:1)
+check(routedReview.reviewedRecord?.transactionID==reviewB.transactionID && routedReview.carriedWriteGuards.map(\.transactionID)==[reviewA.transactionID],"native NSMenu second-row dispatch selects only that represented record")
+check(routedReview.metadataReads==0 && routedReview.postedTextPIDs.isEmpty && routedReview.attributeNamesSet.isEmpty,"native menu dispatch changes no field or input event")
+check(menuForegroundBefore != nil && menuForegroundBefore==NSWorkspace.shared.frontmostApplication?.processIdentifier,"unopened native menu action routing leaves the observed foreground application unchanged")
+print("PASS native unopened menu routing; total \(checks)")

@@ -11,7 +11,7 @@ final class GuidePanel: NSPanel {
   override var canBecomeMain: Bool { false }
 }
 @MainActor final class KeyboardView: OverlayKeyboardView { var showKeys=true }
-@MainActor class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
+@MainActor class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation, NSMenuDelegate {
   enum InsertionTransport { case keyboard, accessibility }
   // Ordinary text entry goes through the receiving application's input pipeline.
   // An advertised AX setter can acknowledge without editing a controlled composer.
@@ -82,7 +82,7 @@ final class GuidePanel: NSPanel {
       return (span,prefix,suffix)
     }
   }
-  struct UnresolvedWrite {let id:UUID;let field:AXUIElement;let pid:pid_t;let originalRange:CFRange;let beforeDigest:Data?;let expectedCaret:Int;let expectedDigest:Data?;var separatorDigest:Data?=nil;var trimmedSeparator=false;var trimmedDigest:Data?=nil;var deferredCaret=false;var mutationAccepted=false;var receiptDigests:[Data]=[];var generatedTrailingSeparator=false;var evidence:MutationEvidence?=nil}
+  struct UnresolvedWrite {let id:UUID;let field:AXUIElement;let pid:pid_t;let originalRange:CFRange;let beforeDigest:Data?;let expectedCaret:Int;let expectedDigest:Data?;var separatorDigest:Data?=nil;var trimmedSeparator=false;var trimmedDigest:Data?=nil;var deferredCaret=false;var mutationAccepted=false;var receiptDigests:[Data]=[];var generatedTrailingSeparator=false;var evidence:MutationEvidence?=nil;var originalBundleIdentifier:String?=nil}
   var unresolvedWrites:[UnresolvedWrite]=[]
   var carriedWriteGuards:[OutstandingWriteReport]=[]
   var writeTrackingReadable=true
@@ -115,16 +115,63 @@ final class GuidePanel: NSPanel {
     carriedWriteGuards += records.filter {!known.contains($0.transactionID ?? "")}
     return persistWriteTracking()
   }
-  @objc func reviewWriteTracking() {
-    guard !active,let record=outstandingWriteReports().first,let id=record.transactionID else {return}
+  struct WriteReviewSelection {let generation:Int;let record:OutstandingWriteReport}
+  var writeReviewGeneration=0
+  var writeReviewMenu:NSMenu?
+  func writeReviewName(_ record:OutstandingWriteReport)->String {
+    let running=NSRunningApplication(processIdentifier:record.pid)
+    if let bundle=record.bundleIdentifier,running?.bundleIdentifier==bundle,let name=running?.localizedName {return name}
+    return record.bundleIdentifier ?? "Unidentified app"
+  }
+  func populateWriteReviewMenu(_ menu:NSMenu) {
+    writeReviewGeneration += 1;menu.removeAllItems();menu.autoenablesItems=false
+    let records=outstandingWriteReports()
+    for record in records {
+      guard let id=record.transactionID else {continue}
+      let item=NSMenuItem(title:writeReviewName(record)+" · PID \(record.pid) · \(id.prefix(8))…",action:#selector(reviewWriteTracking(_:)),keyEquivalent:"")
+      let selection=WriteReviewSelection(generation:writeReviewGeneration,record:record)
+      item.target=self;item.representedObject=selection;item.toolTip="Application: \(record.bundleIdentifier ?? "unknown") · Process: \(record.pid) · Record: \(id)"
+      item.isEnabled=reviewRecord(selection) != nil
+      menu.addItem(item)
+    }
+    if menu.items.isEmpty {let empty=NSMenuItem(title:"No unconfirmed writes",action:nil,keyEquivalent:"");empty.isEnabled=false;menu.addItem(empty)}
+  }
+  func menuNeedsUpdate(_ menu:NSMenu) {
+    if let review=writeReviewMenu,menu===review || menu===status?.menu {populateWriteReviewMenu(review)}
+  }
+  func reviewRecord(_ selection:WriteReviewSelection)->OutstandingWriteReport? {
+    guard !active,writeTrackingReadable,selection.generation==writeReviewGeneration,
+      let id=selection.record.transactionID else {return nil}
+    let matches=outstandingWriteReports().filter {$0.transactionID==id}
+    guard matches.count==1,let record=matches.first else {return nil}
+    let selected=selection.record
+    guard record.pid==selected.pid,record.bundleIdentifier==selected.bundleIdentifier,
+      record.expectedCaret==selected.expectedCaret,record.mutationAccepted==selected.mutationAccepted,
+      record.caretAttemptPending==selected.caretAttemptPending else {return nil}
+    return record
+  }
+  func confirmWriteReview(_ selection:WriteReviewSelection)->Bool {
+    let record=selection.record
     let alert=NSAlert();alert.messageText="A previous write is unconfirmed"
-    let name=NSRunningApplication(processIdentifier:record.pid)?.localizedName ?? "the original app"
-    alert.informativeText="Check and save the unsent draft in \(name) before clearing this write's tracking. Clearing changes no draft text and never replays the word. Other pending records remain protected."
+    alert.informativeText="Check and save the unsent draft in \(writeReviewName(record)) before clearing this write's tracking.\n\nApplication: \(record.bundleIdentifier ?? "unknown")\nProcess: \(record.pid)\nRecord: \(record.transactionID ?? "unavailable")\n\nClearing changes no draft text and never replays the word. Other records remain protected."
     alert.addButton(withTitle:"Keep protection");alert.addButton(withTitle:"Clear this write's tracking")
-    guard alert.runModal() == .alertSecondButtonReturn else {return}
+    return alert.runModal() == .alertSecondButtonReturn
+  }
+  @discardableResult func completeWriteReview(_ selection:WriteReviewSelection,confirmed:Bool)->Bool {
+    guard confirmed,let record=reviewRecord(selection),let id=record.transactionID else {return false}
+    let carriedBefore=carriedWriteGuards,unresolvedBefore=unresolvedWrites
     carriedWriteGuards.removeAll {$0.transactionID==id};unresolvedWrites.removeAll {$0.id.uuidString==id}
-    if !persistWriteTracking() {writeTrackingReadable=false}
-    updateModeIndicator()
+    guard persistWriteTracking() else {
+      carriedWriteGuards=carriedBefore;unresolvedWrites=unresolvedBefore;writeTrackingReadable=false
+      writeReviewGeneration += 1;updateModeIndicator();return false
+    }
+    writeReviewGeneration += 1;updateModeIndicator();return true
+  }
+  @objc func reviewWriteTracking(_ sender:NSMenuItem) {
+    guard let selection=sender.representedObject as? WriteReviewSelection,reviewRecord(selection) != nil else {return}
+    // The alert runs a modal loop: a record can resolve or change while it is open.
+    // Revalidate the exact snapshot after the explicit decision; never choose first.
+    _=completeWriteReview(selection,confirmed:confirmWriteReview(selection))
   }
   var strokeCancellationGeneration=0
   var sessionGeneration=0
@@ -166,7 +213,8 @@ final class GuidePanel: NSPanel {
   let words = WordVocabulary.words
   lazy var gestureLexicon = GestureLexicon(words:words)
   func validateMenuItem(_ menuItem:NSMenuItem) -> Bool {
-    menuItem.action == #selector(showLastCorrection) ? (!active && lastOwnedWord != nil) : (menuItem.action == #selector(chooseMode(_:)) ? !active : true)
+    if menuItem.action == #selector(reviewWriteTracking(_:)) {return (menuItem.representedObject as? WriteReviewSelection).flatMap {reviewRecord($0)} != nil}
+    return menuItem.action == #selector(showLastCorrection) ? (!active && lastOwnedWord != nil) : (menuItem.action == #selector(chooseMode(_:)) ? !active : true)
   }
   func applicationDidFinishLaunching(_ notification: Notification) {
     loadWriteTracking()
@@ -200,7 +248,9 @@ final class GuidePanel: NSPanel {
     menu.addItem(.separator())
     menu.addItem(withTitle: "Correct Last Word…", action: #selector(showLastCorrection), keyEquivalent: "")
     menu.addItem(withTitle:"Last Swipe Suggestions…",action:#selector(showSwipeSuggestions),keyEquivalent:"")
-    menu.addItem(withTitle:"Review Unconfirmed Write…",action:#selector(reviewWriteTracking),keyEquivalent:"")
+    let review=NSMenuItem(title:"Review Unconfirmed Writes",action:nil,keyEquivalent:"")
+    let reviewSubmenu=NSMenu();reviewSubmenu.delegate=self;writeReviewMenu=reviewSubmenu
+    populateWriteReviewMenu(reviewSubmenu);review.submenu=reviewSubmenu;menu.addItem(review);menu.delegate=self
     menu.addItem(withTitle: "Setup…", action: #selector(showSetup), keyEquivalent: "")
     menu.addItem(withTitle: "Quit Swipepad", action: #selector(quit), keyEquivalent: "q")
     for item in menu.items { item.target = self }
@@ -927,7 +977,7 @@ final class GuidePanel: NSPanel {
     }) else {return false}
     if let last=matching.last {
       // Anchor the exact observed bytes, including a provider-normalized NEW separator.
-      let confirmed=UnresolvedWrite(id:last.id,field:last.field,pid:last.pid,originalRange:last.originalRange,beforeDigest:last.beforeDigest,expectedCaret:last.expectedCaret,expectedDigest:fingerprint(field),trimmedSeparator:last.trimmedSeparator,generatedTrailingSeparator:last.generatedTrailingSeparator && !last.trimmedSeparator)
+      let confirmed=UnresolvedWrite(id:last.id,field:last.field,pid:last.pid,originalRange:last.originalRange,beforeDigest:last.beforeDigest,expectedCaret:last.expectedCaret,expectedDigest:fingerprint(field),trimmedSeparator:last.trimmedSeparator,generatedTrailingSeparator:last.generatedTrailingSeparator && !last.trimmedSeparator,originalBundleIdentifier:last.originalBundleIdentifier)
       continuationAnchor=confirmed
     }
     let ids=Set(matching.map(\.id));unresolvedWrites.removeAll {ids.contains($0.id)}
@@ -978,6 +1028,7 @@ final class GuidePanel: NSPanel {
     guard let receipts=WordReceipts.values(before:before,location:range.location,length:range.length,inserted:inserted,previousOwnSeparator:previousOwn) else {return .cannotComplete}
     var write=UnresolvedWrite(id:UUID(),field:field,pid:pid,originalRange:range,beforeDigest:Data(SHA256.hash(data:Data(before.utf8))),expectedCaret:range.location+inserted.utf16.count,expectedDigest:Data(SHA256.hash(data:Data(expected.utf8))),separatorDigest:receipts.freshNBSP.map {Data(SHA256.hash(data:Data($0.utf8)))},trimmedDigest:(inserted.hasSuffix(" ") && range.location+inserted.utf16.count==expected.utf16.count) ? Data(SHA256.hash(data:Data(expected.dropLast().utf8))):nil,deferredCaret:!keyboardBackend && useValueBackend,receiptDigests:receipts.all.map {Data(SHA256.hash(data:Data($0.utf8)))},generatedTrailingSeparator:inserted.hasSuffix(" "))
     write.evidence=MutationEvidence(before:before,range:range,inserted:inserted)
+    write.originalBundleIdentifier=NSRunningApplication(processIdentifier:pid)?.bundleIdentifier
     unresolvedWrites.append(write) // BEFORE mutation: even an error may follow accepted AXValue.
     guard persistWriteTracking() else {unresolvedWrites.removeAll {$0.id==write.id};writeTrackingReadable=false;return .cannotComplete}
     captureDiagnostics.writeAttempts += 1
@@ -1023,7 +1074,7 @@ final class GuidePanel: NSPanel {
       (selected.location==write.expectedCaret && selected.length==0) else {return .cannotComplete}
     if !matchesReceipt(write,observed) {
       guard let trimmed=write.trimmedDigest,observed==trimmed else {return .cannotComplete}
-      write=UnresolvedWrite(id:write.id,field:write.field,pid:write.pid,originalRange:write.originalRange,beforeDigest:write.beforeDigest,expectedCaret:write.expectedCaret-1,expectedDigest:observed,trimmedSeparator:true,deferredCaret:true,mutationAccepted:true)
+      write=UnresolvedWrite(id:write.id,field:write.field,pid:write.pid,originalRange:write.originalRange,beforeDigest:write.beforeDigest,expectedCaret:write.expectedCaret-1,expectedDigest:observed,trimmedSeparator:true,deferredCaret:true,mutationAccepted:true,originalBundleIdentifier:write.originalBundleIdentifier)
     }
     // Retire the caret attempt before calling AX, including errors or delayed acknowledgements.
     write.deferredCaret=false;unresolvedWrites[index]=write
