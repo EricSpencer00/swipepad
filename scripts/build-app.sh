@@ -1,8 +1,10 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-swift build -c release
 APP=${SWIPEPAD_BUILD_APP:-dist/Swipepad.app}
+swift scripts/check-build-target.swift "$APP"
+swift build -c release
+swift scripts/check-build-target.swift "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Swipepad "$APP/Contents/MacOS/Swipepad"
 cp -R ThirdParty/* "$APP/Contents/Resources/"
@@ -16,8 +18,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.ericspencer00.swipepad</string>
 <key>CFBundleName</key><string>Swipepad</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.27</string>
-<key>CFBundleVersion</key><string>30</string>
+<key>CFBundleShortVersionString</key><string>0.2.28</string>
+<key>CFBundleVersion</key><string>31</string>
 <key>CFBundleIconFile</key><string>Swipepad</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>

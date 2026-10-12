@@ -1,5 +1,11 @@
 # Prototype validation
 
+## Shared all-apps identity/access failure
+
+A later native TextEdit activation returned `kAXErrorAPIDisabled` (-25211) from both authoritative roots, with zero field admission and zero writes. The live process and on-disk app had different code hashes/signing requirements; dynamic signature verification explicitly reported that disk code did not match running code. Targeted system evidence also rejected the existing Accessibility code requirement. This supersedes a focus-publication-only explanation for the current all-apps failure. No role, subrole or AXValue inspection was reached, so unsupported text controls are not established. No Codex UI automation occurred.
+
+The isolated candidate prevents known running-target overwrite before/after compilation, checks runtime identity before activation/mutation, and exposes health-only diagnostics that do not query foreground fields. 471 controlled handler checks pass. The real running-target guard returned refusal without changing the target. The staged signed diagnostic process independently reported signature consistency and existing Accessibility trust; this is explicitly not the old GUI process's trust result. Live health on a legacy responder safely returns unsupported using capture-only protocol compatibility. No TCC/security settings, credentials, live process or user-owned build were changed. Actual receiving-field E2E remains pending coordinated GUI readiness and coherent build/relaunch.
+
 ## Focus-publication candidate — October 12
 
 Text-free installed v0.2.26 counters identified the activation refusal: both authoritative focus queries returned Apple's `kAXErrorNoValue` (-25212), with `missingFocusedField`, no input-capability inspection and zero writes. The recorded target PID was independently mapped to Codex using running-application bundle metadata; no Codex AX/UI automation occurred. The exact user phrase does not appear in source; the corresponding refusal messages describe missing focused input. This establishes the failing gate, not why Codex withheld focus.

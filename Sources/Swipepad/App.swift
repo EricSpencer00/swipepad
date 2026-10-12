@@ -86,6 +86,7 @@ final class GuidePanel: NSPanel {
   var focusLookupErrors:(application:Int?,system:Int?)=(nil,nil)
   // OS-backed in production; sandbox ports control this flag without changing the OS.
   var secureInputActive:Bool {IsSecureEventInputEnabled()}
+  var runtimeSignatureValid:Bool {checkRuntimeSignature()}
   let words = WordVocabulary.words
   lazy var gestureLexicon = GestureLexicon(words:words)
   func validateMenuItem(_ menuItem:NSMenuItem) -> Bool {
@@ -188,6 +189,7 @@ final class GuidePanel: NSPanel {
     Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
       MainActor.assumeIsolated {
         guard let self else { return }
+        if self.active && !self.runtimeSignatureValid {self.stopForChangedBuild();return}
         let trusted = AXIsProcessTrusted()
         if trusted != self.lastTrusted {
           self.lastTrusted = trusted
@@ -355,12 +357,12 @@ final class GuidePanel: NSPanel {
       cancel("OFF")
       return
     }
-    if secureContextActive() {exitSecureContext();showActivationRefusal(statusReason ?? "Secure input · typing stayed off");return}
     lastOwnedWord=nil
     statusReason=nil;feedbackPanel?.orderOut(nil);panel?.orderOut(nil);overlayPanel?.orderOut(nil)
     let trial=captureDiagnostics.trial+1
     captureDiagnostics=CaptureDiagnostics();captureDiagnostics.trial=trial
     captureDiagnostics.mode=inputMode.rawValue;captureDiagnostics.stage="activating";captureDiagnostics.liftGraceSeconds=liftGraceSeconds
+    guard runtimeSignatureValid else {stopForChangedBuild();return}
     guard AXIsProcessTrusted() else {
       captureDiagnostics.stage="activationRefused";captureDiagnostics.result="accessibilityRequired"
       updateModeIndicator()
@@ -368,9 +370,16 @@ final class GuidePanel: NSPanel {
       showActivationRefusal(statusReason ?? "Accessibility required · typing stayed off")
       return
     }
+    if secureContextActive() {exitSecureContext();showActivationRefusal(statusReason ?? "Secure input · typing stayed off");return}
     // Refuse before installing capture or suppressing pointer input. A non-text
     // double-Command must leave ordinary input usable without a dismissal click.
     requestActivation()
+  }
+  func stopForChangedBuild() {
+    cancel("OFF");lastOwnedWord=nil
+    captureDiagnostics.stage="runtimeIdentityChanged";captureDiagnostics.result="Running code differs from app bundle"
+    showFeedback("App changed while running · quit and relaunch the intended signed build")
+    if NSApp != nil {showActivationRefusal(statusReason ?? "App changed while running")}
   }
   static let focusPublicationRetryInterval=0.1
   static let focusPublicationWaitSeconds=1.5
@@ -384,6 +393,7 @@ final class GuidePanel: NSPanel {
   }
   // Capture stays Off until authoritative focus passes the unchanged admission guards.
   func requestActivation(deadline:Double?=nil) {
+    guard runtimeSignatureValid else {stopForChangedBuild();return}
     let pid=currentApplicationPID,token=activationRetryToken
     let limit=deadline ?? ProcessInfo.processInfo.systemUptime+Self.focusPublicationWaitSeconds
     guard acquireTarget() else {
@@ -782,6 +792,7 @@ final class GuidePanel: NSPanel {
     return (down,up)
   }
   func replaceSelectedText(_ field:AXUIElement,pid:pid_t,range:CFRange,inserted:String,expectedBefore:String?=nil)->AXError {
+    guard runtimeSignatureValid else {stopForChangedBuild();return .cannotComplete}
     guard identity(field,pid:pid),let current=selection(field),current.location==range.location,current.length==range.length,
       permitsResolvedWrite(field,pid:pid,range:range) else {return .cannotComplete}
     let before=attribute(field,kAXValueAttribute) as? String
@@ -936,6 +947,7 @@ final class GuidePanel: NSPanel {
   }
   @objc func selectCandidate(_ sender:NSButton) {
     guard !active else {return}
+    guard runtimeSignatureValid else {stopForChangedBuild();return}
     guard !sender.isHidden else {rejectCorrection("candidateHidden");return}
     guard let owned=lastOwnedWord else {rejectCorrection("ownershipUnavailable");return}
     guard !unresolvedWrites.contains(where:{$0.pid==owned.pid}) else {rejectCorrection("unresolvedPreviousWrite");return}

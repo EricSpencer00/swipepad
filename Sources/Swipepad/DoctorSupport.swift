@@ -6,8 +6,21 @@ import CryptoKit
 import SwipepadCore
 import TrackpadBridge
 
+struct RuntimeHealth:Codable {
+  let kind:String,scope:String,runtimeIdentity:String
+  let signatureMatchesDisk:Bool,accessibilityTrusted:Bool,monitorInstalled:Bool
+}
+
 @MainActor extension AppDelegate {
   static let bundleID = "com.ericspencer00.swipepad"
+  func checkRuntimeSignature()->Bool {
+    var code:SecCode?
+    guard SecCodeCopySelf([], &code)==errSecSuccess,let code else {return false}
+    return SecCodeCheckValidity(code,SecCSFlags(rawValue:kSecCSStrictValidate),nil)==errSecSuccess
+  }
+  func runtimeHealth(live:Bool)->RuntimeHealth {
+    RuntimeHealth(kind:"identityPermission",scope:live ? "Live GUI identity and trust; no field queries":"Diagnostic process identity and trust; not the GUI process",runtimeIdentity:captureRuntimeIdentity(),signatureMatchesDisk:runtimeSignatureValid,accessibilityTrusted:AXIsProcessTrusted(),monitorInstalled:globalMonitor != nil)
+  }
   func captureRuntimeIdentity()->String {
     if let captureIdentityCache {return captureIdentityCache}
     let executable=Bundle.main.executableURL
@@ -37,7 +50,7 @@ import TrackpadBridge
       input.signatureValid =
         SecStaticCodeCheckValidity(
           code, SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate), nil)
-        == errSecSuccess
+        == errSecSuccess && (!live || runtimeSignatureValid)
       var information: CFDictionary?
       if SecCodeCopySigningInformation(
         code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
@@ -296,6 +309,11 @@ import TrackpadBridge
       callerPID = caller.processIdentifier
     }
     let encoder = JSONEncoder()
+    if notification.userInfo?["healthOnly"] as? Bool == true {
+      guard let data=try? encoder.encode(runtimeHealth(live:true)),let json=String(data:data,encoding:.utf8) else {return}
+      DistributedNotificationCenter.default().postNotificationName(Notification.Name("com.ericspencer00.swipepad.doctorResponse."+request),object:nil,userInfo:["json":json],deliverImmediately:true)
+      return
+    }
     let report=notification.userInfo?["captureOnly"] as? Bool == true ? captureStatusReport():doctorReport(live:true,excludingPID:callerPID)
     guard let data = try? encoder.encode(report),
       let json = String(data: data, encoding: .utf8)
@@ -347,3 +365,19 @@ import TrackpadBridge
   }
 }
 @MainActor private final class DoctorResponse { var json: String? }
+
+@MainActor extension AppDelegate {
+  func liveRuntimeHealth()->RuntimeHealth? {
+    let request=UUID().uuidString,response=DoctorResponse(),center=DistributedNotificationCenter.default()
+    let observer=center.addObserver(forName:Notification.Name("com.ericspencer00.swipepad.doctorResponse."+request),object:nil,queue:.main) {n in
+      let json=n.userInfo?["json"] as? String
+      MainActor.assumeIsolated {response.json=json}
+    }
+    defer {center.removeObserver(observer)}
+    center.postNotificationName(Notification.Name("com.ericspencer00.swipepad.doctorRequest"),object:nil,userInfo:["request":request,"pid":NSNumber(value:ProcessInfo.processInfo.processIdentifier),"captureOnly":true,"healthOnly":true],deliverImmediately:true)
+    let deadline=Date().addingTimeInterval(3)
+    while response.json==nil && Date()<deadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
+    guard let json=response.json,let data=json.data(using:.utf8),let report=try? JSONDecoder().decode(RuntimeHealth.self,from:data),report.kind=="identityPermission" else {return nil}
+    return report
+  }
+}

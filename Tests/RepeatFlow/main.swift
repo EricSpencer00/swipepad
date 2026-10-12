@@ -41,6 +41,8 @@ final class MemoryInput:AppDelegate {
   var focusErrors:(application:Int?,system:Int?)=(nil,nil)
   var finishedActivations=0
   var simulatedSecureInput=false
+  var simulatedRuntimeSignatureValid=true
+  override var runtimeSignatureValid:Bool {simulatedRuntimeSignatureValid}
   override var secureInputActive:Bool {simulatedSecureInput}
   override func validTarget()->Bool {beforeTargetValidation?();return super.validTarget()}
   override var currentApplicationPID:pid_t? {pid}
@@ -604,3 +606,13 @@ print("PASS all focus publication cancellation; total \(checks)")
 let nativeSecureModel=MemoryInput();nativeSecureModel.activate();nativeSecureModel.simulatedSecureInput=true;word(nativeSecureModel,"cat")
 check(!nativeSecureModel.active && nativeSecureModel.captureDiagnostics.writeAttempts==0 && nativeSecureModel.captureDiagnostics.lastTargetRefusal=="secureInput","sandbox Secure Input still stops capture with zero writes")
 print("PASS locked-host independent sandbox; total \(checks)")
+
+let changedBuild=MemoryInput();changedBuild.simulatedRuntimeSignatureValid=false;changedBuild.toggle()
+check(!changedBuild.active && changedBuild.metadataReads==0 && changedBuild.captureDiagnostics.stage=="runtimeIdentityChanged" && changedBuild.captureDiagnostics.writeAttempts==0,"changed running build refuses before any field query or permission assumption")
+let changedBeforeWrite=MemoryInput();changedBeforeWrite.activate();word(changedBeforeWrite,"cat");let confirmedBeforeChange=changedBeforeWrite.value;let attemptsBeforeChange=changedBeforeWrite.captureDiagnostics.writeAttempts
+changedBeforeWrite.simulatedRuntimeSignatureValid=false
+_ = changedBeforeWrite.replaceSelectedText(changedBeforeWrite.ownedField,pid:40001,range:changedBeforeWrite.caret,inserted:"world ")
+check(!changedBeforeWrite.active && changedBeforeWrite.value==confirmedBeforeChange && changedBeforeWrite.captureDiagnostics.writeAttempts==attemptsBeforeChange,"changed build releases capture before new mutation")
+let legacyHealth=try! JSONEncoder().encode(changedBuild.captureStatusReport())
+check((try? JSONDecoder().decode(RuntimeHealth.self,from:legacyHealth))==nil,"legacy counters cannot be misreported as live trust health")
+print("PASS runtime identity guards; total \(checks)")

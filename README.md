@@ -120,3 +120,8 @@ Transaction acknowledgement flags describe AX acknowledgement, not delivery. A f
 If an app briefly reports no focused field, the candidate retries that authoritative focus for up to 1.5 seconds while capture stays Off. Escape, ordinary typing, another double-Command, or switching apps cancels the wait. A field that never becomes available remains refused. This targets delayed focus publication; Codex delivery still needs a human test.
 
 `./scripts/ci-apple.sh` runs serial build, core and sandbox handler checks and compiles an owned WebKit receiving-field fixture. It creates no runner registration and runs no GUI by default. The command does not register or configure a persistent runner. GUI receiving-field tests require an unlocked coordinated session and existing Accessibility access; generated contacts do not establish physical typing accuracy.
+
+
+Build to a separate `SWIPEPAD_BUILD_APP` candidate while the app is running. The build script refuses a known running output target; coordinate replacement and relaunch with its owner. Changing an app bundle while its old process remains running can invalidate its code identity and Accessibility access across otherwise supported fields.
+
+The staged identity candidate adds `--self-health` (this diagnostic process) and `--health-status` (supported live GUI) to report signature consistency and Accessibility trust without inspecting any foreground field. Older responders return an explicit unsupported result; it is not a trust failure. The current all-apps report is an Accessibility API-disabled/signature consistency failure, not proof that every text control is unsupported. GUI receiving-field qualification remains pending.
