@@ -1,0 +1,38 @@
+name: Open source guard
+
+# Keeps the repository public and MIT-licensed. Fails loudly if either changes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Public repo and license present
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Repository must be public
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          private=$(gh api "repos/$REPO" --jq '.private')
+          if [ "$private" != "false" ]; then
+            echo "::error::$REPO is private. Swipepad must stay public open source."
+            exit 1
+          fi
+
+      - name: MIT license must be present
+        run: |
+          if ! grep -q "^MIT License" LICENSE 2>/dev/null; then
+            echo "::error::LICENSE is missing or no longer MIT."
+            exit 1
+          fi
