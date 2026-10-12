@@ -24,6 +24,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-SIGN_IDENTITY=${SWIPEPAD_SIGN_IDENTITY:--}
+if [ -n "${SWIPEPAD_SIGN_IDENTITY:-}" ]; then
+  SIGN_IDENTITY=$SWIPEPAD_SIGN_IDENTITY
+elif security find-identity -p codesigning | grep -q "\"SwipeType Dev\""; then
+  SIGN_IDENTITY="SwipeType Dev"
+else
+  SIGN_IDENTITY=-
+fi
 codesign --force --sign "$SIGN_IDENTITY" --identifier com.ericspencer00.swipepad "$APP"
 printf 'Built %s (not notarized; inspect signing with doctor)\n' "$APP"
