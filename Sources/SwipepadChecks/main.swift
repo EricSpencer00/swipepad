@@ -755,3 +755,13 @@ do {
   check(CandidateChoice.choiceIndex(for: Point(0.5, 0.92), count: 0) == nil, "no choices means nothing to pick")
 }
 print("Passed \(count) checks including candidate choice.")
+
+// MARK: Insertion route and undo (red first): web editors such as Claude's composer get real key presses.
+do {
+  check(InsertionRoute.choose(insideWebArea: true) == .keystroke, "text inside a web editor is typed with key presses")
+  check(InsertionRoute.choose(insideWebArea: false) == .accessibility, "native text fields keep the verified accessibility route")
+  check(UndoPlan.backspaceCount(for: "hello") == 6, "undo deletes the word and its trailing space")
+  check(UndoPlan.alternatives(after: "hello", from: ["hello", "hallo", "hells"]) == ["hallo", "hells"], "undo offers the next candidates in order")
+  check(UndoPlan.alternatives(after: "hello", from: ["hello"]).isEmpty, "undo with no runner-up offers nothing")
+}
+print("Passed \(count) checks including insertion route and undo.")

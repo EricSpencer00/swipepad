@@ -6,9 +6,9 @@ public struct PadRegion: Equatable, Sendable {
   public static let full = PadRegion(minX: 0, minY: 0, maxX: 1, maxY: 1)
   /// Width to height of the physical trackpad (about 4.3 by 3 inches).
   public static let trackpadWidthToHeight = 1.45
-  /// Phone keyboards are about half as tall as they are wide. This area is centred, leaving the
-  /// palm rest and edges outside it.
-  public static let iPhoneSized = PadRegion(minX: 0.2, minY: 0.2825, maxX: 0.8, maxY: 0.7175)
+  /// About 71 mm by 36 mm on a trackpad of about 110 mm by 75 mm: an iPhone's width and keyboard height.
+  /// Estimates from published sizes, not measured on a device.
+  public static let iPhoneSized = PadRegion(minX: 0.175, minY: 0.26, maxX: 0.825, maxY: 0.74)
   public static let minimumSpan = 0.3
 
   public let minX: Double, minY: Double, maxX: Double, maxY: Double

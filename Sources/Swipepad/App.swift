@@ -27,6 +27,7 @@ final class GuidePanel: NSPanel {
   var strokeCalibration:CalibrationRect?
   var strokeSamples:[StrokeSample]=[]
   var jumpFilter=ContactJumpFilter() // drops roll spikes before they reach the trail or recognition
+  var lastKeystroke:(word:String,alternatives:[String])? // last word typed by key presses, for Delete undo
   var shownChoices:[String]=[] // a close call: words offered on the top strip, typed only when tapped
   /// Pad area used as the keyboard (full trackpad unless the iPhone-sized area is chosen).
   var padRegion:PadRegion { PadRegion(stored:UserDefaults.standard.array(forKey:"padRegion") as? [Double]) }
@@ -87,7 +88,7 @@ final class GuidePanel: NSPanel {
   var statusReason:String?
   var feedbackPanel:GuidePanel?
   var feedbackGeneration=0
-  lazy var cornerProtection=HotCornerProtection(isActive:{[weak self] in self?.active == true},failed:{[weak self] in self?.pauseForInputProtectionFailure()},escapePressed:{[weak self] in self?.hotkey.cancel();self?.cancel("OFF")},observedScroll:{[weak self] in self?.captureDiagnostics.scrollEventsPassed += 1})
+  lazy var cornerProtection=HotCornerProtection(isActive:{[weak self] in self?.active == true},failed:{[weak self] in self?.pauseForInputProtectionFailure()},escapePressed:{[weak self] in self?.hotkey.cancel();self?.cancel("OFF")},observedScroll:{[weak self] in self?.captureDiagnostics.scrollEventsPassed += 1},deletePressed:{[weak self] in self?.undoLastKeystrokeWord() ?? false})
   var captureDiagnostics=CaptureDiagnostics()
   var captureIdentityCache:String?
   var focusLookupErrors:(application:Int?,system:Int?)=(nil,nil)
@@ -894,8 +895,46 @@ final class GuidePanel: NSPanel {
     captureDiagnostics.lastAXError=Int(result.rawValue)
     return result
   }
+  /// True when the field sits inside a web area, such as Electron or browser editors.
+  func insideWebArea(_ element:AXUIElement)->Bool {
+    var current:AXUIElement?=element
+    for _ in 0..<20 {
+      guard let node=current else {return false}
+      if (attribute(node,kAXRoleAttribute) as? String)=="AXWebArea" {return true}
+      guard let parent=attribute(node,kAXParentAttribute),CFGetTypeID(parent)==AXUIElementGetTypeID() else {return false}
+      current=unsafeDowncast(parent,to:AXUIElement.self)
+    }
+    return false
+  }
+  /// Types the word and a space as real key presses to the focused app. Used for web editors, where
+  /// accessibility writes can't be confirmed. Only runs when the same app and field are still focused.
+  func typeByKeystroke(_ word:String,alternatives:[String],field:AXUIElement)->Bool {
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == originalPID,identity(field,pid:originalPID),
+      let events=Self.textEvents(word+" ") else {cancel("Focus changed · no word typed");return false}
+    events.0.post(tap:.cghidEventTap);events.1.post(tap:.cghidEventTap)
+    lastKeystroke=(word,alternatives)
+    captureDiagnostics.lastInsertionBackend="keystroke"
+    label.stringValue="Typed · press Delete to undo the last word"
+    return true
+  }
+  /// Deletes the last keystroke-typed word and offers the next candidates on the top strip.
+  func undoLastKeystrokeWord()->Bool {
+    guard let last=lastKeystroke,active,NSWorkspace.shared.frontmostApplication?.processIdentifier == originalPID else {return false}
+    for _ in 0..<UndoPlan.backspaceCount(for:last.word) {
+      for down in [true,false] {
+        guard let key=CGEvent(keyboardEventSource:nil,virtualKey:51,keyDown:down) else {continue}
+        key.setIntegerValueField(.eventSourceUserData,value:Self.ownTextEventTag)
+        key.post(tap:.cghidEventTap)
+      }
+    }
+    lastKeystroke=nil
+    setChoices(UndoPlan.alternatives(after:last.word,from:last.alternatives))
+    label.stringValue="Undone · tap the next word on the top strip"
+    return true
+  }
   func insertWord(_ word:String,alternatives:[String])->Bool {
     guard active,validTarget(),let target,let original=originalSelection else {cancel("Focus or caret changed · no word inserted");return false}
+    if InsertionRoute.choose(insideWebArea:insideWebArea(target)) == .keystroke {return typeByKeystroke(word,alternatives:alternatives,field:target)}
     guard let before=attribute(target,kAXValueAttribute) as? String,
       originalContentDigest==Data(SHA256.hash(data:Data(before.utf8))) else {cancel("Content changed during swipe · no word inserted");return false}
     guard let plan=try? WordInsertion.plan(before,location:original.location,length:original.length,word:word).get() else {cancel("Use a word boundary or select a whole word · no word inserted");return false}
@@ -1066,7 +1105,7 @@ final class GuidePanel: NSPanel {
 
   func cancel(_ reason: String) {
     abandonActivation()
-    setChoices([])
+    setChoices([]);lastKeystroke=nil
     deferredLift=nil;liftTimerGeneration += 1
     if active && reason != "OFF" && reason != "Quit" {
       let category:String
@@ -1158,7 +1197,8 @@ final class GuidePanel: NSPanel {
   private(set) var capturedButtons:Set<Int64>=[]
   private(set) var startFailureReason:String?
   let isActive:()->Bool,failed:()->Void,escapePressed:()->Void,observedScroll:()->Void
-  init(isActive:@escaping ()->Bool,failed:@escaping ()->Void,escapePressed:@escaping ()->Void,observedScroll:@escaping ()->Void = {}) {self.isActive=isActive;self.failed=failed;self.escapePressed=escapePressed;self.observedScroll=observedScroll}
+  let deletePressed:()->Bool // true when Delete undid the last typed word, so the key is consumed
+  init(isActive:@escaping ()->Bool,failed:@escaping ()->Void,escapePressed:@escaping ()->Void,observedScroll:@escaping ()->Void = {},deletePressed:@escaping ()->Bool = {false}) {self.isActive=isActive;self.failed=failed;self.escapePressed=escapePressed;self.observedScroll=observedScroll;self.deletePressed=deletePressed}
   func start()->Bool {
     // Never swallow the release of a drag/click that started in another app.
     guard capturedButtons.isEmpty,NSEvent.pressedMouseButtons==0 else {startFailureReason="Release the mouse button before starting swiping";return false}
@@ -1170,7 +1210,7 @@ final class GuidePanel: NSPanel {
       guard let info else {return Unmanaged.passUnretained(event)}
       let blocked = MainActor.assumeIsolated {
         let owner=Unmanaged<HotCornerProtection>.fromOpaque(info).takeUnretainedValue()
-        if type == .keyDown {
+        if type == .keyDown && event.getIntegerValueField(.eventSourceUserData) != AppDelegate.ownTextEventTag {
           return owner.handleCaptureKey(type,keyCode:event.getIntegerValueField(.keyboardEventKeycode))
         }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -1186,7 +1226,9 @@ final class GuidePanel: NSPanel {
     source=s;CFRunLoopAddSource(CFRunLoopGetMain(),s,.commonModes);CGEvent.tapEnable(tap:port,enable:true);return true
   }
   func handleCaptureKey(_ type:CGEventType,keyCode:Int64)->Bool {
-    guard isActive(),type == .keyDown,keyCode==53 else {return false}
+    guard isActive(),type == .keyDown else {return false}
+    if keyCode == 51 {return deletePressed()} // Delete undoes the last word only; otherwise it passes through
+    guard keyCode == 53 else {return false}
     escapePressed()
     return true // Consume mode-exit Escape before the receiving editor handles it.
   }
