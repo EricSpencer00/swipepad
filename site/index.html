@@ -16,13 +16,13 @@ html,body{height:100%;margin:0}
 body{background:var(--black);color:var(--white);font-family:var(--mono);overflow:hidden}
 .intro{position:fixed;inset:0;display:grid;place-items:center;padding:24px;transition:opacity .7s var(--ease)}
 .intro.gone{opacity:0;pointer-events:none}
-.stage{width:min(92vw,460px)}
-.pad{position:relative;aspect-ratio:440/300;border:1px solid var(--hair);transition:opacity .6s var(--ease)}
+.stage{width:min(92vw,520px)}
+.pad{position:relative;aspect-ratio:1000/380;border:1px solid var(--hair);transition:opacity .6s var(--ease)}
 .pad.gone{opacity:0}
 .pad svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
-.key{position:absolute;transform:translate(-50%,-50%);width:8.6%;aspect-ratio:1;display:grid;place-items:center;
-  border:1px solid var(--hair);font:500 clamp(14px,4.2vw,19px)/1 var(--mono);color:var(--dim);opacity:0;transition:color .12s,border-color .12s}
-.key.lit{color:var(--white);border-color:var(--white)}
+.key{position:absolute;transform:translate(-50%,-50%);width:8.6%;height:22.67%;display:grid;place-items:center;
+  border:1px solid var(--hair);border-radius:6px;background:oklch(0.11 0 0);font:500 clamp(13px,3.6vw,18px)/1 var(--mono);color:oklch(0.82 0 0);opacity:0;transition:color .12s,border-color .12s,background .12s}
+.key.lit{color:var(--white);border-color:var(--white);background:oklch(0.24 0 0)}
 .field{margin-top:18px;height:60px;border:1px solid var(--hair);display:flex;align-items:center;padding:0 18px;
   font:500 clamp(24px,7vw,30px)/1 var(--mono);letter-spacing:.02em;opacity:0;transition:opacity .6s var(--ease)}
 .field.gone{opacity:0}
@@ -68,10 +68,11 @@ body{background:var(--black);color:var(--white);font-family:var(--mono);overflow
 </section>
 
 <script>
-const NS="http://www.w3.org/2000/svg",W=440,H=300;
+const NS="http://www.w3.org/2000/svg",W=1000,H=380;
 const rows=[["q","w","e","r","t","y","u","i","o","p"],["a","s","d","f","g","h","j","k","l"],["z","x","c","v","b","n","m"]];
-const offs=[0,22,66],P=44,ys=[55,150,245],pos={};
-rows.forEach((r,ri)=>r.forEach((k,i)=>pos[k]=[22+offs[ri]+i*P,ys[ri]]));
+// Same geometry as the app overlay: bottom-left origin, columns 0.1 apart, rows at y 0.8 / 0.5 / 0.2.
+const offs=[0,0.5,1.5],ys=[0.8,0.5,0.2],pos={};
+rows.forEach((r,ri)=>r.forEach((k,i)=>pos[k]=[(i+offs[ri]+0.5)/10*W,(1-ys[ri])*H]));
 const pad=document.getElementById('pad');
 const keyEls={};
 rows.forEach((r,ri)=>r.forEach((k,i)=>{
@@ -103,7 +104,7 @@ function spline(pts){
 function buildSwipe(word,shown,start,duration,seed){
   const letters=word.split('');
   const keys=letters.map((l,i)=>{const p=pos[l];
-    return [p[0]+Math.sin((i+1)*12.9898+seed)*5, p[1]+Math.cos((i+1)*78.233+seed)*4];});
+    return [p[0]+Math.sin((i+1)*12.9898+seed)*0.012*W, p[1]+Math.cos((i+1)*78.233+seed)*0.012*H];});
   const {samples,arc}=spline(keys);
   const n=samples.length,L=arc[n-1];
   const heading=i=>{const a=samples[Math.max(0,i-2)],b=samples[Math.min(n-1,i+2)];return Math.atan2(b[1]-a[1],b[0]-a[0]);};
@@ -125,7 +126,7 @@ function buildSwipe(word,shown,start,duration,seed){
   const land=letters.map((_,i)=>start+tAt[i===letters.length-1?n-1:i*N]);
   const path=document.createElementNS(NS,'path');
   path.setAttribute('d','M'+samples.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L'));
-  path.setAttribute('fill','none');path.setAttribute('stroke','#fff');path.setAttribute('stroke-width','3.6');
+  path.setAttribute('fill','none');path.setAttribute('stroke','#fff');path.setAttribute('stroke-width','10');
   path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');
   path.setAttribute('stroke-dasharray',L);path.setAttribute('stroke-dashoffset',L);path.style.opacity=0;
   g.appendChild(path);
