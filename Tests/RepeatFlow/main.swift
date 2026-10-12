@@ -23,15 +23,19 @@ final class MemoryInput:AppDelegate {
   var selectedTextWritable=true
   var omitPlainValue=false
   var accessibleValueOverride:String?
+  var placeholderAttribute:String?
   var plainValueError:AXError = .noValue
   var textSuiteReadable=true
   var forcedCharacterCount:Int?
   var truncatedTextSuite=false
   var missingCharacterCount=false
+  var alwaysTextSuiteCount=false
+  var rangeTextOverride:String?
   var afterTextSuiteRead:(()->Void)?
   var fullRangeReads=0
   override func parameterizedText(_ field:AXUIElement,range:CFRange)->String? {
     metadataReads += 1;fullRangeReads += 1
+    if let override=rangeTextOverride {return range.location==0 && range.length==override.utf16.count ? override:nil}
     guard textSuiteReadable,range.location==0,range.length==value.utf16.count else {return nil}
     let snapshot=truncatedTextSuite ? String(value.prefix(1)):value
     afterTextSuiteRead?();afterTextSuiteRead=nil
@@ -41,7 +45,7 @@ final class MemoryInput:AppDelegate {
     metadataReads += 1
     // Legacy fixtures model an AXValue-only provider. Text-suite cases explicitly
     // enable a separate authoritative character-count/range implementation.
-    guard omitPlainValue || accessibleValueOverride != nil || forcedCharacterCount != nil else {return nil}
+    guard alwaysTextSuiteCount || omitPlainValue || accessibleValueOverride != nil || forcedCharacterCount != nil else {return nil}
     guard !missingCharacterCount else {return nil}
     let count=forcedCharacterCount ?? value.utf16.count
     return count>=0 && count<=1_000_000 ? count:nil
@@ -73,6 +77,7 @@ final class MemoryInput:AppDelegate {
   var acknowledgePostedTextWithoutEditing=false
   var holdPostedCaret=false
   var richTextSpaceReflow=false
+  var afterPostedText:((String)->Void)?
   var trackingPersistenceSucceeds=true
   override func persistWriteTracking()->Bool {trackingPersistenceSucceeds}
   override var runtimeSignatureValid:Bool {simulatedRuntimeSignatureValid}
@@ -95,6 +100,7 @@ final class MemoryInput:AppDelegate {
       if text.hasSuffix(" ") {value=TextReplacement.replacing(value,location:caret.location+text.utf16.count-1,length:1,with:"\u{00a0}")!}
     }
     if holdPostedCaret {holdPostedCaret=false} else {caret=CFRange(location:caret.location+text.utf16.count,length:0)}
+    afterPostedText?(text)
   }
   override func validTarget()->Bool {beforeTargetValidation?();return super.validTarget()}
   override var currentApplicationPID:pid_t? {pid}
@@ -102,6 +108,7 @@ final class MemoryInput:AppDelegate {
   override func finishActivation() {finishedActivations += 1;activate()}
   override func attribute(_ field:AXUIElement,_ name:String)->CFTypeRef? {
     metadataReads += 1
+    if name==kAXPlaceholderValueAttribute as String {return placeholderAttribute.map {$0 as CFString}}
     if name==kAXValueAttribute {
       captureDiagnostics.valueReadAXError=Int((omitPlainValue ? plainValueError:.success).rawValue)
       captureDiagnostics.valueReadKind=omitPlainValue ? "nil":"string"
@@ -765,6 +772,61 @@ check(placeholder.captureDiagnostics.textEvidenceSource=="fullRange" && placehol
 placeholder.cancel("OFF")
 print("PASS contradictory accessible-value evidence; total \(checks)")
 
+// Caret movement alone cannot establish which document bytes changed. These
+// controlled providers exercise the production reader/dispatch/confirmation path,
+// not a hand-assembled receipt or a third-party compatibility assertion.
+let phantom=MemoryInput();phantom.alwaysTextSuiteCount=true
+phantom.accessibleValueOverride="Owned fixture hint";phantom.rangeTextOverride="Owned fixture hint";phantom.forcedCharacterCount=18
+phantom.placeholderAttribute="Owned fixture hint"
+phantom.afterPostedText={_ in phantom.accessibleValueOverride=nil;phantom.rangeTextOverride=nil;phantom.forcedCharacterCount=nil}
+phantom.activate();phantom.insertionTransport = .keyboard;word(phantom,"cat")
+let phantomDiagnostics=phantom.captureDiagnostics
+check(phantom.value=="cat " && phantomDiagnostics.confirmationCaretMatches==true && phantomDiagnostics.confirmationContentMatches==false,"provider phantom contents disappear while actual inserted word and exact caret remain")
+check(phantomDiagnostics.writeBeforeUTF16Length==18 && phantomDiagnostics.writeExpectedUTF16Length==22 && phantomDiagnostics.writeInsertedUTF16Length==4 && phantomDiagnostics.confirmationObservedUTF16Length==4,"pre-write, expected and observed lengths distinguish lost surrounding document")
+check(phantomDiagnostics.confirmationInsertedSpanMatches==true && phantomDiagnostics.confirmationPrefixMatches==true && phantomDiagnostics.confirmationSuffixMatches==false && phantomDiagnostics.confirmationEvidenceKind=="surroundingTextChanged","structural evidence separates inserted span from disappeared provider suffix")
+check(phantomDiagnostics.writeBeforeEvidenceSource=="fullRange" && phantomDiagnostics.writeBeforeValueMatchesRange==true,"even agreeing direct value and full-range evidence can be invalidated by the receiving editor")
+check(phantomDiagnostics.writeBeforeMatchesPlaceholder==true,"matching provider placeholder is a structural diagnostic, never an empty-document inference")
+word(phantom,"world")
+check(phantom.postedTextPIDs==[40001] && phantom.unresolvedWrites.count==1,"phantom-provider receipt mismatch never dispatches a second word or relaxes its guard")
+let phantomRecord=phantom.unresolvedWrites[0].id;phantom.cancel("OFF");phantom.activate();word(phantom,"auto")
+check(phantom.postedTextPIDs==[40001] && phantom.unresolvedWrites.map(\.id)==[phantomRecord],"cancel/reactivation preserves the unknown write rather than replaying or clearing it")
+phantom.cancel("OFF")
+
+let transformed=MemoryInput();transformed.alwaysTextSuiteCount=true
+transformed.afterPostedText={_ in transformed.value="C"+transformed.value.dropFirst()}
+transformed.activate();transformed.insertionTransport = .keyboard;word(transformed,"cat")
+let transformedDiagnostics=transformed.captureDiagnostics
+check(transformedDiagnostics.writeExpectedUTF16Length==4 && transformedDiagnostics.confirmationObservedUTF16Length==4 && transformedDiagnostics.confirmationCaretMatches==true,"same-length editor transformation reproduces exact caret plus unconfirmed content")
+check(transformedDiagnostics.confirmationInsertedSpanMatches==false && transformedDiagnostics.confirmationPrefixMatches==true && transformedDiagnostics.confirmationSuffixMatches==true && transformedDiagnostics.confirmationEvidenceKind=="insertedTextChanged","changed inserted letters are distinct from surrounding-text/provider mismatch")
+word(transformed,"world")
+check(transformed.postedTextPIDs==[40001] && transformed.unresolvedWrites.count==1 && transformed.captureDiagnostics.insertions==0,"same-length transformed insertion remains one dispatch and zero confirmations")
+transformed.cancel("OFF")
+
+let caretOnly=MemoryInput();caretOnly.value="abcdef";caretOnly.alwaysTextSuiteCount=true
+caretOnly.afterPostedText={text in caretOnly.value="abcdef";caretOnly.caret=CFRange(location:text.utf16.count,length:0)}
+caretOnly.activate();caretOnly.insertionTransport = .keyboard;word(caretOnly,"cat")
+check(caretOnly.captureDiagnostics.confirmationCaretMatches==true && caretOnly.captureDiagnostics.confirmationBeforeContentMatches==true && caretOnly.captureDiagnostics.confirmationEvidenceKind=="unchangedContent","moved caret with unchanged original bytes is reported without treating it as insertion")
+check(caretOnly.captureDiagnostics.writeBeforeUTF16Length==6 && caretOnly.captureDiagnostics.writeExpectedUTF16Length==10 && caretOnly.captureDiagnostics.confirmationObservedUTF16Length==6 && caretOnly.unresolvedWrites.count==1,"caret-only acknowledgement retains unknown-write evidence")
+caretOnly.cancel("OFF")
+
+let unicodeEvidence=MemoryInput();unicodeEvidence.value="😀 old done";unicodeEvidence.caret=CFRange(location:3,length:3);unicodeEvidence.alwaysTextSuiteCount=true
+unicodeEvidence.afterPostedText={_ in unicodeEvidence.value=unicodeEvidence.value.replacingOccurrences(of:"cat",with:"Cat")}
+unicodeEvidence.activate();unicodeEvidence.insertionTransport = .keyboard;word(unicodeEvidence,"cat")
+check(unicodeEvidence.captureDiagnostics.confirmationPrefixMatches==true && unicodeEvidence.captureDiagnostics.confirmationSuffixMatches==true && unicodeEvidence.captureDiagnostics.confirmationInsertedSpanMatches==false && unicodeEvidence.captureDiagnostics.confirmationEvidenceKind=="insertedTextChanged","UTF16 surrogate prefix and nonempty selection retain exact structural boundaries")
+unicodeEvidence.cancel("OFF")
+
+let providerDifference=MemoryInput();providerDifference.accessibleValueOverride="Owned fixture hint";providerDifference.activate();providerDifference.insertionTransport = .keyboard;word(providerDifference,"cat")
+check(providerDifference.captureDiagnostics.writeBeforeValueMatchesRange==false && providerDifference.captureDiagnostics.writeBeforeUTF16Length==0 && providerDifference.captureDiagnostics.confirmationEvidenceKind=="fullReceipt","contradictory accessible value is visible structurally while the authoritative empty document confirms")
+let safeEvidenceJSON=String(decoding:try! JSONEncoder().encode(providerDifference.captureStatusReport()),as:UTF8.self)
+check(!safeEvidenceJSON.contains("Owned fixture hint") && !safeEvidenceJSON.contains("insertedDigest") && !safeEvidenceJSON.contains("prefixDigest"),"stored diagnostics contain no provider text or receipt fingerprints")
+providerDifference.cancel("OFF")
+let authoredHint=MemoryInput();authoredHint.value="Owned fixture hint";authoredHint.placeholderAttribute=authoredHint.value;authoredHint.caret=CFRange(location:18,length:0);authoredHint.activate();authoredHint.insertionTransport = .keyboard;word(authoredHint,"world")
+check(authoredHint.value=="Owned fixture hint world " && authoredHint.captureDiagnostics.writeBeforeMatchesPlaceholder==true && authoredHint.captureDiagnostics.insertions==1,"real authored text identical to a placeholder is retained and receives a normal exact append")
+authoredHint.cancel("OFF")
+let legacyEvidenceJSON=try! JSONSerialization.data(withJSONObject:["trial":0,"mode":"trackpad","stage":"off","callbacks":0,"contactFrames":0,"idleFrames":0,"states":[:],"gateWaitFrames":0,"samples":0,"candidates":0,"maximumCallbackDelayMilliseconds":0,"axRequests":0,"maximumAXMilliseconds":0,"totalAXMilliseconds":0,"resetReasons":[:],"cancelReasons":[:],"scrollEventsPassed":0,"inputProtectionFailures":0,"rejectionReasons":[:],"targetAttempts":0,"targetAdmissions":0,"releaseFrames":0,"graceRejoins":0,"graceCommits":0,"liftGraceSeconds":0,"droppedFrames":0,"recognizedWords":0,"rejectedWords":0,"pendingWords":0,"writeAttempts":0,"acceptedMutations":0,"confirmationWaitMilliseconds":0,"insertions":0])
+check((try? JSONDecoder().decode(CaptureDiagnostics.self,from:legacyEvidenceJSON))?.writeBeforeUTF16Length==nil,"optional readback evidence keeps older stored capture snapshots decodable")
+print("PASS structural mutation evidence; total \(checks)")
+
 let delayedAXCorrection=MemoryInput();delayedAXCorrection.selectedTextWritable=false;delayedAXCorrection.activate();word(delayedAXCorrection,"world");let delayedAXOwned=delayedAXCorrection.lastOwnedWord!;delayedAXCorrection.cancel("OFF")
 delayedAXCorrection.lastOwnedWord=AppDelegate.OwnedWord(field:delayedAXOwned.field,pid:delayedAXOwned.pid,range:delayedAXOwned.range,alternatives:["world","cat"],fingerprint:delayedAXOwned.fingerprint)
 delayedAXCorrection.delayedValuePublication=true;delayedAXCorrection.selectCandidate(NSButton(title:"cat",target:nil,action:nil))
@@ -799,6 +861,7 @@ print("PASS exact rich-text reflow and refusal checks; total \(checks)")
 let ambiguous=MemoryInput();ambiguous.activate();ambiguous.gestureLexicon=GestureLexicon(words:["cat","catt"],usePrior:false);word(ambiguous,"cat")
 check(ambiguous.captureDiagnostics.recognitionReason=="candidateMargin" && ambiguous.captureDiagnostics.recognitionRankedCount==2 && ambiguous.lastSwipeChoices.count==2 && ambiguous.lastSuggestion != nil,"low-confidence gesture retains ranked choices and score reason")
 check(ambiguous.captureDiagnostics.feedbackKind=="strokeRejected" && (ambiguous.captureDiagnostics.feedbackCount ?? 0)>0 && ambiguous.captureDiagnostics.writeAttempts==0 && ambiguous.statusReason?.contains("Uncertain:")==true,"uncertain gesture gives actionable visible-feedback state without forced text")
+check(ambiguous.captureDiagnostics.rejectionReasons==["candidateMargin":1],"rejection diagnostics store a fixed reason code rather than transient candidate words")
 ambiguous.cancel("OFF");ambiguous.insertSuggestion("cat")
 check(ambiguous.value=="cat " && ambiguous.unresolvedWrites.isEmpty && ambiguous.captureDiagnostics.feedbackKind=="suggestionInserted","explicit suggestion choice uses verified original field and confirms once")
 ambiguous.insertSuggestion("cat")

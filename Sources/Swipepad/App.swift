@@ -58,7 +58,31 @@ final class GuidePanel: NSPanel {
   var finger: Int32?
   var path: [Point] = []
   var pending = false
-  struct UnresolvedWrite {let id:UUID;let field:AXUIElement;let pid:pid_t;let originalRange:CFRange;let beforeDigest:Data?;let expectedCaret:Int;let expectedDigest:Data?;var separatorDigest:Data?=nil;var trimmedSeparator=false;var trimmedDigest:Data?=nil;var deferredCaret=false;var mutationAccepted=false;var receiptDigests:[Data]=[];var generatedTrailingSeparator=false}
+  // Structural readback diagnostics never authorize or resolve a write. Digests
+  // remain in memory with the existing transaction; only counts/booleans escape.
+  struct MutationEvidence {
+    let beforeLength:Int,expectedLength:Int,insertedLength:Int,prefixLength:Int,suffixLength:Int
+    let insertedDigests:[Data],prefixDigest:Data,suffixDigest:Data
+    static func digest(_ units:[UInt16])->Data {units.withUnsafeBytes {Data(SHA256.hash(data:Data($0)))}}
+    init(before:String,range:CFRange,inserted:String) {
+      let units=Array(before.utf16)
+      beforeLength=units.count;insertedLength=inserted.utf16.count
+      expectedLength=units.count-range.length+insertedLength;prefixLength=range.location;suffixLength=units.count-range.location-range.length
+      insertedDigests=[Self.digest(Array(inserted.utf16))]+(inserted.hasSuffix(" ") ? [Self.digest(Array((String(inserted.dropLast())+"\u{00a0}").utf16))]:[])
+      prefixDigest=Self.digest(Array(units.prefix(prefixLength)))
+      suffixDigest=Self.digest(Array(units.suffix(suffixLength)))
+    }
+    func compare(_ observed:String,location:Int)->(inserted:Bool,prefix:Bool,suffix:Bool) {
+      let units=Array(observed.utf16),end=location+insertedLength
+      let span=location>=0 && end<=units.count ? insertedDigests.contains(Self.digest(Array(units[location..<end]))):false
+      let prefix=prefixLength<=units.count && Self.digest(Array(units.prefix(prefixLength)))==prefixDigest
+      // Compare the unchanged suffix at the expected insertion boundary, rather
+      // than accepting a matching suffix at some other position in the document.
+      let suffix=end<=units.count && units.count-end==suffixLength && Self.digest(Array(units.suffix(suffixLength)))==suffixDigest
+      return (span,prefix,suffix)
+    }
+  }
+  struct UnresolvedWrite {let id:UUID;let field:AXUIElement;let pid:pid_t;let originalRange:CFRange;let beforeDigest:Data?;let expectedCaret:Int;let expectedDigest:Data?;var separatorDigest:Data?=nil;var trimmedSeparator=false;var trimmedDigest:Data?=nil;var deferredCaret=false;var mutationAccepted=false;var receiptDigests:[Data]=[];var generatedTrailingSeparator=false;var evidence:MutationEvidence?=nil}
   var unresolvedWrites:[UnresolvedWrite]=[]
   var carriedWriteGuards:[OutstandingWriteReport]=[]
   var writeTrackingReadable=true
@@ -318,21 +342,29 @@ final class GuidePanel: NSPanel {
   // Never infer empty contents from a caret or accept a truncated/context-only range.
   func fieldText(_ field:AXUIElement)->String? {
     captureDiagnostics.textEvidenceSource=nil;captureDiagnostics.textEvidenceLength=nil;captureDiagnostics.rangeTextAXError=nil
+    captureDiagnostics.textEvidenceValueLength=nil;captureDiagnostics.textEvidenceCharacterCount=nil;captureDiagnostics.textEvidenceValueMatchesRange=nil
+    captureDiagnostics.textEvidenceMatchesPlaceholder=nil
     captureDiagnostics.valueReadAXError=nil;captureDiagnostics.valueReadKind=nil
     let direct=attribute(field,kAXValueAttribute) as? String
+    captureDiagnostics.textEvidenceValueLength=direct?.utf16.count
     if let error=captureDiagnostics.valueReadAXError,error != 0 && error != Int(AXError.noValue.rawValue) && error != Int(AXError.attributeUnsupported.rawValue) {return nil}
     let count=characterCount(field)
+    captureDiagnostics.textEvidenceCharacterCount=count
+    let placeholder=(attribute(field,kAXPlaceholderValueAttribute as String) as? String).flatMap {$0.isEmpty ? nil:$0}
     if let count {
       // Prefer document text to a provider's accessible value/placeholder. The two
       // can even have the same length, so length agreement alone is insufficient.
       if let text=parameterizedText(field,range:CFRange(location:0,length:count)) {
         guard text.utf16.count==count,characterCount(field)==count else {return nil}
+        captureDiagnostics.textEvidenceValueMatchesRange=direct.map {$0==text}
+        captureDiagnostics.textEvidenceMatchesPlaceholder=placeholder.map {$0==text}
         captureDiagnostics.textEvidenceSource="fullRange";captureDiagnostics.textEvidenceLength=count;return text
       }
       let error=captureDiagnostics.rangeTextAXError
       guard error==Int(AXError.noValue.rawValue) || error==Int(AXError.parameterizedAttributeUnsupported.rawValue) || error==Int(AXError.attributeUnsupported.rawValue) else {return nil}
     }
     guard let text=direct,count==nil || count==text.utf16.count else {return nil}
+    captureDiagnostics.textEvidenceMatchesPlaceholder=placeholder.map {$0==text}
     captureDiagnostics.textEvidenceSource="value";captureDiagnostics.textEvidenceLength=text.utf16.count;return text
   }
   var currentApplicationPID:pid_t? {NSWorkspace.shared.frontmostApplication?.processIdentifier}
@@ -781,7 +813,7 @@ final class GuidePanel: NSPanel {
     captureDiagnostics.candidates=candidates.count
     guard let top=candidates.first else {
       if let target,let range=originalSelection,let digest=originalContentDigest,!choices.isEmpty {lastSuggestion=UninsertedSuggestion(field:target,pid:originalPID,range:range,digest:digest,choices:choices)}
-      rejectCompletedStroke(choices.isEmpty ? "No matching path · swipe across the letter keys again":"Uncertain: "+choices.prefix(3).joined(separator:" / ")+" · not typed. Swipe again, or Escape → Last Swipe Suggestions.");return
+      rejectCompletedStroke(choices.isEmpty ? "No matching path · swipe across the letter keys again":"Uncertain: "+choices.prefix(3).joined(separator:" / ")+" · not typed. Swipe again, or Escape → Last Swipe Suggestions.",reason:reason);return
     }
     lastSuggestion=nil
     showFeedback("Recognized: "+top+" · inserting",kind:"recognized")
@@ -807,9 +839,10 @@ final class GuidePanel: NSPanel {
     }
     showFeedback("Typed: "+top+" · swipe next",kind:"inserted")
   }
-  func rejectCompletedStroke(_ message:String) {
+  func rejectCompletedStroke(_ message:String,reason:String="strokeIncomplete") {
     captureDiagnostics.rejectedWords += 1
-    captureDiagnostics.rejectionReasons[message,default:0] += 1
+    captureDiagnostics.recognitionReason=reason
+    captureDiagnostics.rejectionReasons[reason,default:0] += 1
     prepareNextStroke(preserveTrail:true);showFeedback(message,kind:"strokeRejected")
     // Earlier accepted gestures must not wait for a later successful word.
     drainQueuedWords()
@@ -944,9 +977,17 @@ final class GuidePanel: NSPanel {
     let previousOwn=continuationAnchor.map {$0.pid==pid && CFEqual($0.field,field) && $0.expectedCaret==range.location && $0.generatedTrailingSeparator && !$0.trimmedSeparator && $0.expectedDigest==Data(SHA256.hash(data:Data(before.utf8)))} ?? false
     guard let receipts=WordReceipts.values(before:before,location:range.location,length:range.length,inserted:inserted,previousOwnSeparator:previousOwn) else {return .cannotComplete}
     var write=UnresolvedWrite(id:UUID(),field:field,pid:pid,originalRange:range,beforeDigest:Data(SHA256.hash(data:Data(before.utf8))),expectedCaret:range.location+inserted.utf16.count,expectedDigest:Data(SHA256.hash(data:Data(expected.utf8))),separatorDigest:receipts.freshNBSP.map {Data(SHA256.hash(data:Data($0.utf8)))},trimmedDigest:(inserted.hasSuffix(" ") && range.location+inserted.utf16.count==expected.utf16.count) ? Data(SHA256.hash(data:Data(expected.dropLast().utf8))):nil,deferredCaret:!keyboardBackend && useValueBackend,receiptDigests:receipts.all.map {Data(SHA256.hash(data:Data($0.utf8)))},generatedTrailingSeparator:inserted.hasSuffix(" "))
+    write.evidence=MutationEvidence(before:before,range:range,inserted:inserted)
     unresolvedWrites.append(write) // BEFORE mutation: even an error may follow accepted AXValue.
     guard persistWriteTracking() else {unresolvedWrites.removeAll {$0.id==write.id};writeTrackingReadable=false;return .cannotComplete}
     captureDiagnostics.writeAttempts += 1
+    captureDiagnostics.writeBeforeUTF16Length=before.utf16.count;captureDiagnostics.writeExpectedUTF16Length=expected.utf16.count
+    captureDiagnostics.writeInsertedUTF16Length=inserted.utf16.count
+    captureDiagnostics.writeBeforeEvidenceSource=captureDiagnostics.textEvidenceSource
+    captureDiagnostics.writeBeforeValueMatchesRange=captureDiagnostics.textEvidenceValueMatchesRange
+    captureDiagnostics.writeBeforeMatchesPlaceholder=captureDiagnostics.textEvidenceMatchesPlaceholder
+    captureDiagnostics.confirmationObservedUTF16Length=nil;captureDiagnostics.confirmationInsertedSpanMatches=nil
+    captureDiagnostics.confirmationPrefixMatches=nil;captureDiagnostics.confirmationSuffixMatches=nil;captureDiagnostics.confirmationEvidenceKind=nil
     captureDiagnostics.lastInsertionBackend=keyboardBackend ? "targetedKeyboard":(useValueBackend ? "valueAndCaret":"selectedText")
     let result:AXError
     if let events {
@@ -1057,9 +1098,21 @@ final class GuidePanel: NSPanel {
     captureDiagnostics.confirmationIdentityMatches=sameTarget
     captureDiagnostics.confirmationCaretMatches=observed.map {InsertionContinuation.permits(originalLocation:original.location,insertedUTF16Count:expectedCaret-original.location,resultLocation:$0.location,resultLength:$0.length,sameTarget:sameTarget)} ?? false
     if let write=unresolvedWrites.last(where:{$0.pid==pid && CFEqual($0.field,field)}) {
-      let digest=fingerprint(field)
+      let text=sameTarget && supportedField(field) ? fieldText(field):nil
+      let digest=text.map {Data(SHA256.hash(data:Data($0.utf8)))}
       captureDiagnostics.confirmationContentMatches=matchesReceipt(write,digest)
       captureDiagnostics.confirmationBeforeContentMatches=digest != nil && write.beforeDigest != nil && digest==write.beforeDigest
+      captureDiagnostics.confirmationObservedUTF16Length=text?.utf16.count
+      if let text,let evidence=write.evidence {
+        let comparison=evidence.compare(text,location:write.originalRange.location)
+        captureDiagnostics.confirmationInsertedSpanMatches=comparison.inserted
+        captureDiagnostics.confirmationPrefixMatches=comparison.prefix;captureDiagnostics.confirmationSuffixMatches=comparison.suffix
+        captureDiagnostics.confirmationEvidenceKind=captureDiagnostics.confirmationContentMatches==true ? "fullReceipt":
+          (captureDiagnostics.confirmationBeforeContentMatches==true ? "unchangedContent":
+          (comparison.inserted && (!comparison.prefix || !comparison.suffix) ? "surroundingTextChanged":
+          (comparison.prefix && comparison.suffix && !comparison.inserted ? "insertedTextChanged":
+          (text.utf16.count != evidence.expectedLength ? "lengthChanged":"contentChanged"))))
+      } else {captureDiagnostics.confirmationEvidenceKind=sameTarget ? "contentUnavailable":"identityChanged"}
     }
     guard sameTarget,let next=observed,captureDiagnostics.confirmationCaretMatches == true,
       permitsResolvedWrite(field,pid:pid,range:next,resolvePending:true) else {return false}

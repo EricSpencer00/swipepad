@@ -10,20 +10,46 @@ import TrackpadBridge
 
 // Owned two-process fixture. `--host` serves an inline page; the default role drives production
 // handlers through real AX. Generated contacts only: no hardware, Chromium or Codex claim.
-let labels=["s":"Swipepad owned single line","t":"Swipepad owned textarea","c":"Swipepad owned editable","p":"Swipepad owned prewrap editable"]
+let labels=["s":"Swipepad owned single line","t":"Swipepad owned textarea","c":"Swipepad owned editable","p":"Swipepad owned prewrap editable",
+ "g":"Swipepad owned generated placeholder","h":"Swipepad owned aria placeholder","r":"Swipepad owned transformed input","x":"Swipepad owned removed hint"]
 let offscreen=CommandLine.arguments.contains("--offscreen")
+let probeKey=CommandLine.arguments.firstIndex(of:"--readback-probe").flatMap {i in CommandLine.arguments.indices.contains(i+1) ? CommandLine.arguments[i+1]:nil}
 let page="""
 <!doctype html><meta charset=utf-8>
 <input id=s aria-label="\(labels["s"]!)" type=text>
 <textarea id=t aria-label="\(labels["t"]!)" rows=3 cols=48></textarea>
 <div id=c role=textbox aria-multiline=true contenteditable=true aria-label="\(labels["c"]!)" style="border:1px solid #888;min-height:2em"></div>
 <div id=p role=textbox aria-multiline=true contenteditable=true aria-label="\(labels["p"]!)" style="border:1px solid #888;min-height:2em;white-space:pre-wrap"></div>
+<style>#g:empty::before{content:attr(data-placeholder);color:gray}</style>
+<div id=g role=textbox contenteditable=true aria-label="\(labels["g"]!)" data-placeholder="Owned fixture hint"></div>
+<div id=h role=textbox contenteditable=true aria-label="\(labels["h"]!)" aria-placeholder="Owned fixture hint"></div>
+<div id=r role=textbox contenteditable=true aria-label="\(labels["r"]!)"></div>
+<div id=x role=textbox contenteditable=true aria-label="\(labels["x"]!)"></div>
 <script>
+const altered=document.getElementById('r');
+altered.addEventListener('input',()=>{
+ const text=altered.textContent;
+ if(!text)return;
+ altered.textContent=text[0].toUpperCase()+text.slice(1);
+ const range=document.createRange();range.selectNodeContents(altered);range.collapse(false);
+ const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+});
+const hinted=document.getElementById('x');
+hinted.addEventListener('beforeinput',(event)=>{
+ if(!hinted.dataset.hint)return;
+ event.preventDefault();
+ delete hinted.dataset.hint;hinted.textContent='';
+ const range=document.createRange();range.selectNodeContents(hinted);range.collapse(true);
+ const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+ document.execCommand('insertText',false,event.data||'');
+});
 function seed(id,b64,start,end){
  const text=b64==='-'?'':new TextDecoder().decode(Uint8Array.from(atob(b64),c=>c.charCodeAt(0)));
  const e=document.getElementById(id);e.focus();
  if(id==='t'||id==='s'){e.value=text;e.setSelectionRange(start,end);return true}
- e.textContent=text;const n=e.firstChild||e,r=document.createRange();
+ e.textContent=text;
+ if(id==='x'&&!text){e.textContent='Owned fixture hint';e.dataset.hint='yes'}
+ const n=e.firstChild||e,r=document.createRange();
  r.setStart(n,start);r.setEnd(n,end);const s=getSelection();s.removeAllRanges();s.addRange(r);return true}
 </script>
 """
@@ -198,6 +224,49 @@ func runCase(_ c:Case) {
  if !owner.unresolvedWrites.isEmpty {finish("FAIL: unresolved owned write in \(c.name); remaining cases would be refused by design")}
  owner.cancel("OFF")
 }
+// Deliberately transformed owned editors expose the same high-level symptom as
+// an unresolved real attempt. This diagnoses evidence, not third-party behavior.
+func runReadbackProbe(_ key:String) {
+ guard offscreen,["g","h","r","x"].contains(key) else {finish("BLOCKED: readback probe is owned and offscreen only")}
+ currentKey=key
+ toHost.fileHandleForWriting.write(Data("seed \(key) - 0 0\n".utf8))
+ guard awaitReply(5)=="ok" else {finish("FAIL: readback seed")}
+ var target:AXUIElement?;let ready=Date().addingTimeInterval(3)
+ while Date()<ready {if let field=ownedField(key),owner.fieldText(field) != nil,let range=owner.selection(field),range.location==0,range.length==0 {target=field;break};RunLoop.current.run(until:Date().addingTimeInterval(0.05))}
+ guard let target,let before=owner.fieldText(target) else {finish("BLOCKED: owned readback field unavailable")}
+ func dom()->String? {
+  toHost.fileHandleForWriting.write(Data("receipt \(key)\n".utf8))
+  return awaitReply(5).flatMap {$0.hasPrefix("value ") ? Data(base64Encoded:String($0.dropFirst(6))):nil}.flatMap {String(data:$0,encoding:.utf8)}
+ }
+ let beforeDOM=dom(),beforeSource=owner.captureDiagnostics.textEvidenceSource
+ let direct=owner.attribute(target,kAXValueAttribute) as? String
+ owner.toggle();guard owner.active else {finish("FAIL: readback activation refused")}
+ swipe("cat",id:20)
+ let afterDeadline=Date().addingTimeInterval(0.3)
+ while owner.pending && Date()<afterDeadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
+ let after=owner.fieldText(target),afterDOM=dom()
+ let d=owner.captureDiagnostics
+ let changed=key=="r" || key=="x"
+ if changed {
+  let once=d.writeAttempts==1 && d.insertions==0 && owner.unresolvedWrites.count==1
+  let matchedCaret=d.confirmationIdentityMatches==true && d.confirmationCaretMatches==true && d.confirmationContentMatches==false
+  swipe("world",id:21)
+  let noSecond=owner.captureDiagnostics.writeAttempts==1
+  let stopDeadline=Date().addingTimeInterval(AppDelegate.acceptedWriteSettleSeconds+0.5)
+  while owner.pending && Date()<stopDeadline {RunLoop.current.run(until:Date().addingTimeInterval(0.05))}
+  let retained=owner.unresolvedWrites.count==1 && !owner.active && owner.captureDiagnostics.writeAttempts==1
+  let evidence=owner.captureDiagnostics
+  let expectedKind=key=="r" ? "insertedTextChanged":"surroundingTextChanged"
+  let classified=evidence.confirmationEvidenceKind==expectedKind && evidence.writeBeforeUTF16Length==before.utf16.count && evidence.confirmationObservedUTF16Length==after?.utf16.count
+  if !(once && matchedCaret && noSecond && retained && afterDOM==after && classified) {failures += 1}
+  print("\(failures==0 ? "PASS":"FAIL") owned readback \(key): beforeAXLength=\(before.utf16.count) beforeDOMLength=\(beforeDOM?.utf16.count ?? -1) beforeSource=\(beforeSource ?? "none") directEqualsRange=\(direct==before) afterAXLength=\(after?.utf16.count ?? -1) afterDOMMatchesAX=\(afterDOM==after) caretMatches=\(matchedCaret) dispatchedOnce=\(once && noSecond) guardRetained=\(retained) classified=\(classified)")
+ } else {
+  let pass=before.isEmpty && beforeDOM==before && afterDOM==after && d.insertions==1 && owner.unresolvedWrites.isEmpty
+  if !pass {failures += 1}
+  print("\(pass ? "PASS":"FAIL") owned placeholder \(key): beforeAXLength=\(before.utf16.count) beforeDOMLength=\(beforeDOM?.utf16.count ?? -1) beforeSource=\(beforeSource ?? "none") directEqualsRange=\(direct==before) afterAXLength=\(after?.utf16.count ?? -1) afterDOMMatchesAX=\(afterDOM==after) confirmed=\(d.insertions)")
+ }
+ finish(failures==0 ? "PASS: owned readback evidence probe":"FAIL: owned readback evidence probe")
+}
 Timer.scheduledTimer(withTimeInterval:0.3,repeats:false) {_ in MainActor.assumeIsolated {
  let session=CGSessionCopyCurrentDictionary() as? [String:Any]
  guard session?["CGSSessionScreenIsLocked"] as? Bool != true else {finish("BLOCKED: owned GUI fixture requires unlocked coordinated session; no window launched")}
@@ -210,6 +279,7 @@ Timer.scheduledTimer(withTimeInterval:0.3,repeats:false) {_ in MainActor.assumeI
  hostProcess.executableURL=executable;hostProcess.arguments=offscreen ? ["--host","--offscreen"]:["--host"];hostProcess.standardInput=toHost;hostProcess.standardOutput=fromHost
  do {try hostProcess.run()} catch {finish("BLOCKED: owned host launch")}
  guard awaitReply(10)=="ready" else {finish("BLOCKED: owned page not ready")}
+ if let probeKey {runReadbackProbe(probeKey)}
  for c in cases {runCase(c)}
  finish(failures==0 ? "PASS: owned WebKit textarea and contenteditable sentence delivery":"FAIL: \(failures) owned web cases")
 }}

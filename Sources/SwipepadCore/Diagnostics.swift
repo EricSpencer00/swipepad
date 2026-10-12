@@ -96,6 +96,21 @@ public struct CaptureDiagnostics: Codable, Sendable {
   public var textEvidenceSource:String?
   public var textEvidenceLength:Int?
   public var rangeTextAXError:Int?
+  public var textEvidenceValueLength:Int?
+  public var textEvidenceCharacterCount:Int?
+  public var textEvidenceValueMatchesRange:Bool?
+  public var textEvidenceMatchesPlaceholder:Bool?
+  public var writeBeforeUTF16Length:Int?
+  public var writeExpectedUTF16Length:Int?
+  public var writeInsertedUTF16Length:Int?
+  public var writeBeforeEvidenceSource:String?
+  public var writeBeforeValueMatchesRange:Bool?
+  public var writeBeforeMatchesPlaceholder:Bool?
+  public var confirmationObservedUTF16Length:Int?
+  public var confirmationInsertedSpanMatches:Bool?
+  public var confirmationPrefixMatches:Bool?
+  public var confirmationSuffixMatches:Bool?
+  public var confirmationEvidenceKind:String?
   public var correctionResult:String?
   public var lastInsertionBackend:String?
   public var confirmationWaitMilliseconds=0.0
