@@ -1,0 +1,6 @@
+name = "swipetype"
+compatibility_date = "2026-10-01"
+routes = [{ pattern = "swipetype.app", custom_domain = true }]
+
+[assets]
+directory = "."
