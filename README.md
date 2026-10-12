@@ -1,122 +1,74 @@
 # Swipepad
 
-An experimental native macOS menu-bar app for swiping words on a MacBook's **physical trackpad**. Double-tap Command while an editable text field is focused, slide one finger across the QWERTY layout shown in the guide, lift to insert the best valid candidate followed by a space. A deliberate lift commits after a short release grace; no per-word confirmation is required. Swipepad checks the resulting caret before continuing. Escape or double-Command exits.
+**Swipe to type on your MacBook trackpad.**
 
-This is an early prototype with a broad US English lexicon, not a polished keyboard replacement. There are no accuracy claims. For `a` or capital `I`, touch and lift in that key’s nearest-center region; no hold timing or per-word confirmation is required. Keep the contact within one key with a small footprint. Quick taps and longer stationary holds both commit once on lift. At activation, a contact reported only as already touching is ignored until its real lift; a fresh starting/making contact works immediately. After a known lift, the next contact is fresh even when the framework first reports touching. A new incidental A/I tap while active is indistinguishable from an intentional tap and can type; stop before ordinary pointing. Multi-letter words use normal swipes. Physical swipe capture still requires hands-on validation. Separate native fixtures verify candidate controls and insertion into owned TextEdit documents using synthetic geometry; they do not establish hardware accuracy. Both guide styles use absolute normalized physical trackpad coordinates; system pointer position does not determine letters.
+Swipepad is an open-source macOS menu-bar app. Double-tap ⌘ in any text field, slide one finger across a QWERTY keyboard, and lift. The word you traced is typed, followed by a space.
 
-## Choose an input mode
+<!-- Demo: docs/demo.gif (coming soon) -->
 
-**Keyboard Guide: In Panel** is the default. Its guide maps the full physical trackpad to QWERTY regardless of cursor position. The persistent guide setting hides the guide. Optional last-word correction is available after turning capture off.
+## How it works
 
-**Keyboard Guide: On Screen** places a large translucent QWERTY keyboard on the focused text window's display. The entire physical pad maps to the entire keyboard: touch the pad at the first letter's relative position, swipe with one finger, then lift. No cursor pre-positioning is required. An app-owned blue marker follows physical contact and the full sampled stroke remains visible. The overlay receives clicks inside its rectangle so they do not click through into the document. A valid word commits on finger lift. The displayed trail uses bounded curves while recognition retains the original physical samples and exact terminal point. System pointer movement alone does not start a stroke; the system pointer is held by an input filter during capture.
+1. **Double-tap ⌘** to turn swiping on. Escape or double-⌘ turns it off.
+2. **Swipe** one finger across the on-screen keyboard. A line follows your finger.
+3. **Lift.** The best-matching word is typed into the focused field, with a trailing space.
 
-Choose **On-Screen Guide Layout…** from the menu or Setup to move and resize a normal preview window with capture off. Its keyboard canvas keeps its aspect ratio. **Use This Layout** saves the canvas's screen position and size for that display, and the opacity slider adjusts key translucency. **Reset Layout** restores that display's default geometry. Return to the intended text field before activating. Layout controls change the drawing, not letter mapping. The full physical pad maps independently across both axes to the QWERTY canvas. Geometry is fixed during capture; changing displays cancels active capture. **Show Keyboard Guide** hides the entire keyboard in either presentation. Optional correction controls are opened separately after capture stops.
+The keyboard can be cropped to a part of QWERTY, and the start of a swipe doesn't have to land exactly on the first letter.
 
-Separate native fixtures checked candidate clicks, focus guards, layout saving and cancellation. The revised shared physical-contact capture path builds and passes synthetic geometry checks, but awaits an actual finger test, including hardware Y orientation, callback delivery, tap-to-click behavior and first-contact capture. Its diagnostic report includes per-activation callback, contact, lift and sample counts without recording words or gesture coordinates.
+## Requirements
 
-## Build and run
+- macOS 13 or later
+- A MacBook with a built-in trackpad
+- Accessibility permission (asked for during setup)
 
-Requires macOS 13+, an installed Swift 6 toolchain and Apple Command Line Tools. The current build is verified on Apple Silicon with Swift 6.3.3 and the macOS 26 SDK. Other machines and OS versions have not been verified.
+Built and tested on Apple Silicon with Swift 6.3 and the macOS 26 SDK. Other versions have not been verified.
+
+## Install
+
+Pre-built releases are not published yet. For now, build from source:
 
 ```sh
-swift run SwipepadChecks
 ./scripts/build-app.sh
 open dist/Swipepad.app
 ```
 
-By default, the build script uses ad hoc signing. You may explicitly select an existing signing identity; neither path performs notarization. macOS may block opening the app. Review the source and follow macOS's normal explicit approval flow if you choose to run your own build; do not disable Gatekeeper. No installer, App Store distribution, or hosted CI is provided. Keep the app at a stable location before choosing to grant access, and restart after permissions change.
+The app is signed with a local development certificate, not a paid Apple Developer ID, and it is not notarized. macOS will block the first launch. Right-click the app, choose **Open**, and confirm. Keep the app in one stable location, because macOS ties Accessibility permission to the app's signature.
 
-## Setup, permissions and doctor
+## Privacy
 
-Swipepad uses an icon-only menu-bar item with an accessible **Ready**, **On**, or **Needs setup** value. The first launch opens **Swipepad Setup** if Accessibility is missing; later launches do not repeatedly open it. Open **Setup…** explicitly whenever needed. Setup is a regular, keyboard-focusable window at normal level, with Command-W and Escape to close. The nonactivating keyboard guide floats while capture is active. Activation without a safe focused input stays Off and shows a nonactivating notice that hides automatically; no dismissal click is required. Losing safe input during capture pauses delivery while the mode remains On. Diagnostics stay in the menu and Setup. The screen overlay shows the keyboard and stroke. Double-Command or Escape turns capture off and hides the guide. Setup and layout preview open only when selected (apart from first-launch setup when access is missing).
+- Swipepad makes no network connections.
+- Typed text, key contents, and gesture paths are never logged or saved.
+- It never uses the clipboard and never sends Return.
+- Secure text fields and Secure Input are refused.
 
-Setup has one next action and collapsed **Diagnostics** containing Check Again, Open Accessibility Settings, Reset Session, Relaunch Swipepad, Copy Report, and separate tap/debounce fields. **Request Access…** explicitly requests macOS approval without another app confirmation. macOS owns the Accessibility switch and any authentication. Readiness uses live process trust and the actual listener; doctor warnings cannot override a trusted process. A checked entry for an older build does not establish trust for a rebuilt app. Freeze the bundle or deliberately select an existing signing identity before approving access. No TCC database edits, permission resets, credential entry, or security bypass is performed.
+## Status
 
-The activation shortcut uses `NSEvent` global key observation with Accessibility access. Active capture also uses a temporary HID event tap to filter pointer motion, clicks and drags, and consume Escape. It does **not request Input Monitoring**. The doctor separates installed-monitor status from an actually observed global event, and gives narrow recovery steps rather than treating another permission as a generic fix. No permission prompt is opened by read-only diagnosis.
+Swipepad is experimental.
+
+- Recognition works well for words swiped from the right starting key. On a large word list, a start three keys off the first letter finds the intended word in the top three only about 1 time in 5, so it's still a weak spot.
+- Physical-trackpad behavior has been validated on one machine only.
+- Typing into some apps is not yet confirmed to work reliably. Test in a plain text field first.
+- It uses Apple's private `MultitouchSupport` framework to read trackpad contacts. An OS update can break that, and the app can't be distributed through the App Store.
+
+The engineering log, review history, and validation evidence are in [docs/ENGINEERING-NOTES.md](docs/ENGINEERING-NOTES.md).
+
+## Development
 
 ```sh
-./scripts/doctor.sh             # read-only machine-readable JSON (schemaVersion 1)
-./scripts/doctor.sh --text      # read-only report with a repair/next step for every stage
-./scripts/doctor.sh --setup     # explicitly open the setup panel; never self-grant access
-./scripts/doctor.sh --relaunch  # explicitly Quit only this exact bundle, wait, then launch once
+swift build
+swift run SwipepadChecks        # ~400 headless checks, ~2 seconds
+SWIPE_TUNE=1 swift run SwipepadChecks   # slow real-lexicon measurements
 ```
 
-The script uses `dist/Swipepad.app` by default. Set `SWIPEPAD_APP` to your own stable app location if you moved it. JSON output contains structural checks, not field contents. Exit status is 2 for a failed check or launcher preflight; warnings/waiting tests do not imply failure or e2e success. The command asks the matching running app for a read-only diagnostic snapshot through local notifications. With no responding app, it labels the result as command preflight: macOS may attribute terminal-launched permission differently, so that result cannot establish GUI trust. No touch capture or synthetic test input is attached by the command. Live keyboard, hotkey, touch/lift, focus and insertion evidence appears in **Setup & Doctor** after your actions. Those in-memory booleans reset when the app restarts; no typed text, key contents, or gesture path is written to diagnostics.
+The `SwipepadCore` target holds the recognizer, layout, and crop logic and has no AppKit dependency. `SwipepadChecks` runs headless checks against it. The `Swipepad` target is the menu-bar app.
 
-| Stage | Supported recovery |
-| --- | --- |
-| Bundle identity / signature | Build the complete bundle, keep one stable location, and use normal macOS explicit approval if blocked. The build uses a local ad hoc signature, not Developer ID/notarization. |
-| Duplicate instances | Quit extras or explicitly select **Relaunch app** / `--relaunch`. Only instances with the exact current bundle executable path are closed; other copies require manual Quit. No force-kill is used by the repair. |
-| Accessibility | **Request Accessibility**, approve only Swipepad through macOS, then **Recheck / reconnect**. Complete OS authentication yourself. |
-| Keyboard / double-Command | Reconnect, return to a text area and tap/release Command twice without another key. Adjust **Hotkey timing** or explicitly relaunch if needed. |
-| Private framework / device | Recheck after wake; use a supported built-in MacBook trackpad and compatible macOS build. No automatic compatibility override exists. |
-| Touch / lift | Activate, lift resting fingers, use one finger, then lift. **Reset session** discards a stuck session. |
-| Secure Input / field | Leave the secure context yourself and focus a supported writable ordinary text area; never disable Secure Input. |
-| Original focus | Reset, focus the intended field, and activate afresh. An app/element change discards the current stroke; a fresh stroke revalidates the new field. |
-| Insertion | Complete a swipe in a disposable supported field, lift and visually verify the inserted word. AX success alone is not proof of correct visible text; unsupported AX writes have no clipboard/broadcast fallback. |
+## Contributing
 
-## Privacy and insertion safety
+Issues and pull requests are welcome. Please keep changes covered by `SwipepadChecks`, and never add logging of typed text or gesture paths.
 
-The app refuses secure text fields, unreadable protection metadata, active Secure Input, fields with no safe targeted insertion backend, and unexpected app or element focus changes. It never uses a clipboard fallback, broadcasts synthetic typing, sends Return, logs typed text, or sends text over the network. A completed valid single-finger gesture commits once after the release grace. Optional alternatives replace only the last recorded own word and space after checking the same field, exact caret and an in-memory content fingerprint. The normal focused field is read transiently for this correction guard; field text and fingerprints are never logged or saved. Insertion targets the original Accessibility element and rechecks its identity, original insertion range, and foreground app immediately beforehand.
+## Credits
 
-Ordinary writable text controls are accepted when the optional subrole is absent (`attributeUnsupported` or `noValue`); unreadable metadata, secure subroles and Secure Input are refused. Single-line fields and composers are eligible when they expose safe editable metadata and a readable selection range; actual delivery still depends on the receiving application. The staged v0.2.25 candidate prefers selected-text replacement when available; guarded whole-value replacement and a caret update are used only when that narrower API is unavailable. The installed v0.2.23 build still prefers whole-value replacement, and its latest Codex trial failed confirmation. The backend is chosen before writing, with no retry of an uncertain mutation. Exact resulting content and caret must match before another write. If an accepted value write is published late, Swipepad waits for its exact content before attempting the caret placement once; it never resends the text. A provider may report the newly generated trailing space as a non-breaking space or omit that separator at the end of its exposed value. Only these exact fresh-separator receipts are accepted; the observed content and caret become the next anchor. If that separator is omitted, the next word receives a leading space. Unrelated content changes remain blocked. Experimental Unicode keyboard events targeted to the original application PID are retained in the development source but disabled by default: application dispatch can change the focused field after posting, and that path has not been qualified in Codex or across other apps. Events are never retried through AX after an uncertain delivery. Normal field contents and the selected range must be readable; fields lacking that safety evidence are refused. Generated-contact fixtures have exercised native single-line/multiline fields and Safari/Brave input, textarea, contenteditable and controlled-input examples. Those limited fixtures do not establish universal compatibility, physical gesture accuracy or Codex support. A confirmed own insertion remains the next word's anchor until an explicit keyboard or focus action resets it; temporarily stale caret reports cannot silently rebase a new word. Unresolved writes block new same-process writes even if the AX field reference changes. Moving the caret or changing the selection during a swipe cancels insertion. Accessibility state can change asynchronously; targeted writes avoid broadcasting text to a newly focused app. Whole-value AX replacement has no atomic compare-and-set: an application edit racing the final pre-write check can be overwritten. This prototype does not guarantee safe concurrent application edits.
+Swipepad uses MIT-licensed components. See [NOTICE.md](NOTICE.md) for their licenses and sources. The word list is derived from SCOWL, and the keyboard layout follows the MIT-licensed SwipeType project. Swipepad is not affiliated with those projects.
 
-## Trackpad behavior
+## License
 
-Public AppKit `NSTouch.normalizedPosition` gives absolute physical coordinates, but [Apple documents that touch sequences are view/focus constrained](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html). It cannot supply this global nonactivating workflow. This prototype builds the MIT OpenMultitouchSupport source and uses Apple's **private MultitouchSupport framework**, outside App Sandbox. OS updates can break it; external Magic Trackpads are not supported by upstream's documented scope. No system security setting is changed. See [NOTICE.md](NOTICE.md) for pinned source provenance and licenses.
-
-The guide is a non-key, nonactivating floating window. Both guide styles map the full physical trackpad to the same QWERTY coordinates. Double-Command is the normal on/off toggle. Valid words commit on lift and the next swipe starts without confirmation. While enabled, mouse button actions are suppressed and a temporary HID event filter suppresses pointer motion before it reaches cursor/window handling. It never warps the pointer, rewrites event coordinates or changes Hot Corner preferences. Capture will refuse to start while a mouse button is already held, preserving an existing drag. No Dock preferences are changed. Turning capture off restores ordinary pointer movement and keys. If capture swallowed a button down, it consumes only that button’s remaining drag/release before removing the tail filter; it never fabricates a release. Quitting removes the process filter. Normal clicks then resume. Actual click/corner suppression still needs hands-on validation.
-
-Changing focus, manually editing or an insertion failure discards the current stroke without turning capture off. Password fields and Secure Input stop capture automatically, because protected keyboard delivery may prevent Escape detection. Mouse-protection failure turns capture Off and releases ordinary pointer input, retaining accepted uncertain writes; explicit activation can reconnect protection without changing system corner settings. Each fresh stroke acquires a new safe focused field and caret; a stroke never retargets halfway through. Unsupported fields remain paused. Escape turns capture off, hides the guide and drops unsent words; accepted uncertain writes remain guarded. Escape is consumed while capture is active, so exiting does not also cancel the receiving field. Multiple fingers discard the partial gesture and require a real lift. Optional **Correct Last Word…** is available after turning capture off and validates the original field, caret and content before replacement.
-
-Menu settings persist: hide the keyboard drawing and configure double-Command tap interval and debounce. Active failure feedback is currently incomplete in On-Screen mode and with the guide hidden; see the implementation review. Command shortcuts cancel the pending tap sequence; ordinary shortcuts are never intercepted. Outside active mode no touch listener is registered. Escape exits and is consumed while capture is active; outside capture it behaves normally.
-
-Both guide presentations use the same recognizer and preserve every physical sample. It ranks complete paths by location, normalized shape and soft endpoint penalties; localized loops provide a small repeated-letter cue while a pause alone does not disambiguate repeated letters. Its heuristic score cutoff returns **No match** for sufficiently distant paths; the score is not a calibrated confidence probability. A valid best candidate commits once on lift with one trailing space. Continuation requires the same application/field and the exact expected collapsed UTF16 caret. An unresolved write blocks further delivery to that field while capture stays on; diagnostics remain in Setup and the menu. Short taps and No match insert nothing; the next fresh contact starts a new stroke without a button or fabricated idle frame. Multi-touch contamination requires all contacts to lift. Alternatives are optional corrections of the last own word, replacing its recorded span rather than appending. Stop first to use the normal pointer, then choose **Correct Last Word…** if needed; another stroke, key input, focus change, caret change or content change invalidates correction. Unsupported words can produce incorrect valid candidates; this prototype is not suitable for unattended or high-stakes entry. Use the receiving app's normal editing tools for other corrections. There is no language model, punctuation gesture or personalized dictionary.
-
-## Current checkpoint: end-to-end typing is not qualified
-
-See the [implementation review and fresh test results](docs/IMPLEMENTATION_REVIEW.md) for ranked defects, the repaired cancellation bug, recognition limits and the live acceptance gate. The [cross-app evidence table](VALIDATION.md#current-evidence--october-11) separates historical native/browser fixtures from current physical acceptance.
-
-The current focus-publication candidate builds and passes 468 sandbox handler checks and 317 core checks, but actual Codex typing remains unqualified. The verified, signed v0.2.26/build29 build is installed and Off after the approved restart; physical receiving-app acceptance is still pending. The concrete Opus bounded-wait fix means after 2.25 seconds without an exact write receipt, capture turns Off, unsent queued words drop, and the uncertain record remains protected. It never retries the write. The completed Opus 5.5 source review covered `dce44f6`; its correction-snapshot and early-boundary follow-ups in `5b778a0` are locally tested. Ready-for-review PR status describes GitHub metadata and does not establish physical acceptance or completion. A recent installed-app contact trial reached recognition and received one successful AX mutation acknowledgement; the expected content and caret could not be confirmed, so further delivery remained blocked. This is an unresolved mutation, not a successful insertion or a proven no-op. Cursor/window jitter is also reported and has not been reproduced under a controlled test. Do not treat native TextEdit fixtures, generated paths or unit counts as evidence that Codex or all text inputs work.
-
-The next acceptance must verify repeated natural physical strokes, including nearly straight `auto`, exact owned-field text/caret receipts, stable cursor/window behavior and normal input after exit. Until then, use disposable text only and inspect the receiving app after an uncertain write. No automatic text retry or fallback is performed.
-
-## Hands-on validation still required
-
-1. Start from an ordinary TextEdit text field after explicitly choosing any necessary permissions. Verify that double-Command opens the guide without taking focus. Test Command+A and held modifiers do not activate it.
-2. Swipe `hello` and `world` with one finger. Verify the trail follows physical position, lift after each word and confirm automatic insertion only into the original field.
-3. Change app/field before selection: insertion must cancel. Try a secure/password field and Secure Input: capture must stop without writing. Double-Command and Quit must stop capture; Escape must stop capture and hide the guide.
-4. Try browser textarea/contenteditable fields. Refusal is expected when Accessibility support or required safe subrole metadata is absent. Ordinary writable `AXTextArea` controls may omit their optional subrole. Repeat with the guide drawing disabled, multi-finger touches, sleep/wake, and rapid activation/cancellation.
-
-These steps have not been reported as passed until an actual hardware/user test is performed.
-
-## Replace the placeholder logo
-
-`Assets/logo.svg` and `scripts/make-icon.swift` contain the original simple trackpad-and-finger-trail design. The build generates all standard 16–1024 pixel icon sizes and assembles the app's `.icns`. The small menu-bar mark is a template image drawn in `DoctorSupport.swift`, so macOS can tint it for light/dark appearance. No external image/model/license is involved. Replace these assets when a final brand is ready.
-
-For repeated local development builds, an existing certificate-backed signing identity can be selected with `SWIPEPAD_SIGN_IDENTITY` when running `scripts/build-app.sh`. No identity is created or automatically selected. Default ad hoc signatures are bound to a changing code hash and can invalidate prior Accessibility approval after a rebuild. Freeze a build before approving access, or deliberately use an existing suitable signing identity; signing does not itself grant permissions or imply notarization.
-
-For an explicit interactive native integration check, run `./scripts/test-integration.sh` with Swift 6.2+ when ready for a brief TextEdit test. It creates its own disposable document, builds a separate harness from application sources, supplies generated curved physical-contact frames through the production handler and performs targeted AX writes and optional native button actions only into that owned document. Correction is qualified separately as a native button action; actual mouse delivery is not established by that check. It aborts if existing access or exact focus is unavailable; it never grants permissions. These fixture tests do not emulate physical trackpad input or certify hardware accuracy. The installed app bundle is not replaced by the test.
-
-After an attempted text mutation, Swipepad retains its target, expected whole-field fingerprint and caret until confirmed. Fast confirmation checks run for 250 ms, then slower checks continue while that transaction owns the active field. Up to eight completed gestures can wait in memory and are delivered in order only after verified insertion boundaries. Focus/manual editing or toggling off discards undelivered gestures, but never removes the unresolved same-field safety guard. No uncertain mutation is retried. Local native fixtures cover delayed caret delivery and queued words using generated contacts; actual Codex insertion and hardware accuracy remain unverified.
-
-Run `./scripts/test-recognition.sh` for a reproducible synthetic recognition comparison. That comparison freezes the original demonstration and expanded supplemental vocabularies for reproducibility; use `./scripts/test-broad-recognition.sh` for the production lexicon. The base geometric matcher scores absolute full-pad location, normalized trajectory shape and soft endpoints; the production index adds the bounded commonness prior described below. A conservative score cutoff rejects weak matches but is not a calibrated confidence probability. The comparison covers reported-word regressions, broader neighbors with deterministic jitter and sample/speed variants, a separate validation set, repeated-letter ambiguity and unsupported-word false accepts. Synthetic center-path results do not establish physical swipe accuracy. Adjacent repeated letters can have identical geometry without a loop cue, and unsupported words can still be accepted incorrectly.
-
-The production candidate index uses approximately 63,000 lowercase ASCII words from the SCOWL size50 US list without handpicked complaint-word additions. **Copyright 2000-2019 by Kevin Atkinson; Copyright (c) J Ross Beresford 1993-1999. All Rights Reserved.** Full distribution terms and source credits are in [ThirdParty/SCOWL](ThirdParty/SCOWL); these notices are included in app Resources. The index is built while Off. Endpoint neighborhoods and a coarse shape shortlist select up to256 words for full raw-path scoring; rare names, apostrophes, accented text and arbitrary unknown words are not covered. The commonness penalty cannot overturn a geometric advantage greater than0.006. `./scripts/test-broad-recognition.sh` reports synthetic development/synthetic lexical-validation top-1/top-5, morphology, jitter/speed variants, unknown-word acceptance, cutoff tradeoffs, index initialization time, warm ranking-call latency and process peak memory. These are reproducible synthetic measurements, not real-user accuracy or hardware/UI timing guarantees. Unknown paths and repeated letters may still produce an incorrect word on lift; normal receiving-app editing and guarded last-word correction remain necessary.
-
-`./scripts/test-disjoint-recognition.sh` evaluates a frozen word set excluded from earlier lexical development and regression sets. It still uses synthetic keyboard geometry, not human gesture distributions. That historical no-prior policy requires score below0.04 and a runner-up margin of at least0.003; these are geometric bounds, not confidence probabilities. Ambiguous strokes are refused without a confirmation dialog and the next fresh gesture can start immediately. This reduces wrong guesses at the cost of missed valid words. Some words have identical geometry: ring/ruing, red/reed and god/good cannot always be separated by the path. Loop cues are not yet reliable. Reliable first-time general swipe entry has not been established.
-
-The current source candidate adds a bounded SCOWL commonness-tier prior: geometry score stays separate, the prior penalty is capped at0.006, and acceptance requires geometry below0.06 with adjusted runner-up margin at least0.003. A geometrically better path by more than0.006 cannot be displaced by commonness. Tiers are coarse common-word evidence, not numeric frequency or confidence probabilities. `./scripts/test-prior-recognition.sh` evaluates a newly frozen, disjoint, commonness-stratified word set; `test-disjoint-recognition.sh` preserves the historical no-prior policy. Both are synthetic. Ambiguity/OOV errors and loop failures remain, so reliable real-world first-time typing is not yet established. All acceptance remains automatic on lift, with no per-word confirmation.
-
-`./scripts/test-stress-recognition.sh` runs16,000synthetic cases with offset starts, sparse samples, endpoint perturbation, pauses, speed variation, jitter and rounded corners. It also reports near-straight and reversal cases such as auto, retaining failure rows. No repositioning/recentering/snapping is used on recognition input. Production vocabulary uses only the licensed SCOWL list; the earlier handpicked words remain in Tests/LegacyVocabulary.swift solely to reproduce historical tests.
-
-Release grace defaults to 220 ms and is adjustable from 0–400 ms in Setup. A brief missing contact can reconnect a moving stroke only within 140 ms, close to the last raw point and after observed movement confirms a compatible heading. The same rules apply to either hand and can accept a changed contact ID. At most three reconnections and 300 ms total missing contact are allowed per stroke. Separate stationary taps, distant contacts, reversals and simultaneous old-release/new-contact frames keep word boundaries. No points or letters are extrapolated across a gap. Very fast adjacent words with indistinguishable position and motion can still be ambiguous; reduce grace or leave a longer release when needed. These bounds are engineering defaults tested on generated traces, not measured human timing accuracy.
-
-For a coordinated hands-on trial, `dist/Swipepad.app/Contents/MacOS/Swipepad --capture-status` returns a live counters-only JSON snapshot. It uses the running process's cached launch identity and stored transaction flags, with no field-content queries, signature validation or transaction reconciliation. Request it at word boundaries, not in a tight polling loop. The full doctor remains available for setup checks before capture. Callback queue delay is measured from host receipt uptime; AX request counts/durations, rejection categories and pointer-filter failures help distinguish recognition failures from delivery failures. These new counters are instrumentation, not proof that current Codex typing or jitter is repaired.
-
-Transaction acknowledgement flags describe AX acknowledgement, not delivery. A false flag also does not establish that an attempted mutation had no effect; unresolved writes remain guarded either way. Cached launch identity is a process baseline, not a fresh on-disk signature check.
-
-
-If an app briefly reports no focused field, the candidate retries that authoritative focus for up to 1.5 seconds while capture stays Off. Escape, ordinary typing, another double-Command, or switching apps cancels the wait. A field that never becomes available remains refused. This targets delayed focus publication; Codex delivery still needs a human test.
-
-`./scripts/ci-apple.sh` runs serial build, core and sandbox handler checks and compiles an owned WebKit receiving-field fixture. It creates no runner registration and runs no GUI by default. The command does not register or configure a persistent runner. GUI receiving-field tests require an unlocked coordinated session and existing Accessibility access; generated contacts do not establish physical typing accuracy.
+[MIT](LICENSE) © 2026 Eric Spencer
