@@ -20,6 +20,31 @@ final class MemoryInput:AppDelegate {
   var editable=true
   var delayFirst=false
   var selectedTextWritable=true
+  var omitPlainValue=false
+  var accessibleValueOverride:String?
+  var plainValueError:AXError = .noValue
+  var textSuiteReadable=true
+  var forcedCharacterCount:Int?
+  var truncatedTextSuite=false
+  var missingCharacterCount=false
+  var afterTextSuiteRead:(()->Void)?
+  var fullRangeReads=0
+  override func parameterizedText(_ field:AXUIElement,range:CFRange)->String? {
+    metadataReads += 1;fullRangeReads += 1
+    guard textSuiteReadable,range.location==0,range.length==value.utf16.count else {return nil}
+    let snapshot=truncatedTextSuite ? String(value.prefix(1)):value
+    afterTextSuiteRead?();afterTextSuiteRead=nil
+    return snapshot
+  }
+  override func characterCount(_ field:AXUIElement)->Int? {
+    metadataReads += 1
+    // Legacy fixtures model an AXValue-only provider. Text-suite cases explicitly
+    // enable a separate authoritative character-count/range implementation.
+    guard omitPlainValue || accessibleValueOverride != nil || forcedCharacterCount != nil else {return nil}
+    guard !missingCharacterCount else {return nil}
+    let count=forcedCharacterCount ?? value.utf16.count
+    return count>=0 && count<=1_000_000 ? count:nil
+  }
   var valueWritable=true
   var rangeWritable=true
   var normalizeSeparator=false
@@ -42,14 +67,37 @@ final class MemoryInput:AppDelegate {
   var finishedActivations=0
   var simulatedSecureInput=false
   var simulatedRuntimeSignatureValid=true
+  var simulatedPostAccess=true
+  var postedTextPIDs:[pid_t]=[]
+  var acknowledgePostedTextWithoutEditing=false
+  var holdPostedCaret=false
   override var runtimeSignatureValid:Bool {simulatedRuntimeSignatureValid}
   override var secureInputActive:Bool {simulatedSecureInput}
+  override var canPostText:Bool {simulatedPostAccess}
+  override func postText(_ events:(CGEvent,CGEvent),to pid:pid_t) {
+    postedTextPIDs.append(pid)
+    guard !acknowledgePostedTextWithoutEditing else {return}
+    var length=0
+    events.0.keyboardGetUnicodeString(maxStringLength:0,actualStringLength:&length,unicodeString:nil)
+    var units=[UniChar](repeating:0,count:length)
+    events.0.keyboardGetUnicodeString(maxStringLength:length,actualStringLength:&length,unicodeString:&units)
+    let text=String(decoding:units,as:UTF16.self)
+    guard let replacement=TextReplacement.replacing(value,location:caret.location,length:caret.length,with:text) else {preconditionFailure("invalid fixture event range")}
+    attemptedWords.append(text);value=replacement
+    if holdPostedCaret {holdPostedCaret=false} else {caret=CFRange(location:caret.location+text.utf16.count,length:0)}
+  }
   override func validTarget()->Bool {beforeTargetValidation?();return super.validTarget()}
   override var currentApplicationPID:pid_t? {pid}
   override func focused(_ pid:pid_t)->AXUIElement? {metadataReads += 1;if missingFocus {focusLookupErrors=focusErrors;return nil};return chosenField ?? ownedField}
   override func finishActivation() {finishedActivations += 1;activate()}
   override func attribute(_ field:AXUIElement,_ name:String)->CFTypeRef? {
     metadataReads += 1
+    if name==kAXValueAttribute {
+      captureDiagnostics.valueReadAXError=Int((omitPlainValue ? plainValueError:.success).rawValue)
+      captureDiagnostics.valueReadKind=omitPlainValue ? "nil":"string"
+      if omitPlainValue {return nil}
+      if let accessibleValueOverride {return accessibleValueOverride as CFString}
+    }
     if name==kAXValueAttribute,let stale=staleValueOnce {staleValueOnce=nil;return stale as CFString}
     if name==kAXValueAttribute,let callback=afterNextValueRead {afterNextValueRead=nil;let snapshot=value as CFString;callback();return snapshot}
     return name==kAXValueAttribute ? value as CFString:nil
@@ -75,6 +123,7 @@ final class MemoryInput:AppDelegate {
     return name==kAXSelectedTextAttribute ? selectedTextMutationError:.success
   }
   func activate() {
+    insertionTransport = .accessibility // Explicit AX suite; never post OS events from model tests.
     liftGraceSeconds=0 // Legacy immediate-handler cases; explicit grace cases below exercise the timer.
     active=true;inputProtectionHealthy=true;strokeSource = .screenOverlay;contactGate.reset();frameOrdering.reset(receivedAfter:0)
     gestureLexicon=GestureLexicon(words:["cat","world","test","hello","auto"])
@@ -616,3 +665,92 @@ check(!changedBeforeWrite.active && changedBeforeWrite.value==confirmedBeforeCha
 let legacyHealth=try! JSONEncoder().encode(changedBuild.captureStatusReport())
 check((try? JSONDecoder().decode(RuntimeHealth.self,from:legacyHealth))==nil,"legacy counters cannot be misreported as live trust health")
 print("PASS runtime identity guards; total \(checks)")
+
+// Full-text-suite providers must use the same authoritative snapshot for admission,
+// planning, pre-write race checks, confirmations, queues and corrections.
+let suite=MemoryInput();suite.omitPlainValue=true;suite.activate()
+for w in ["cat","world","auto"] {word(suite,w)}
+check(suite.value=="cat world auto " && suite.captureDiagnostics.insertions==3 && suite.unresolvedWrites.isEmpty,"missing AXValue with full text suite repeats through actual production reader")
+check(suite.captureDiagnostics.textEvidenceSource=="fullRange" && suite.captureDiagnostics.textEvidenceLength==suite.value.utf16.count && suite.captureDiagnostics.valueReadAXError == -25212,"full-range receipt records only source, length and raw AX error")
+suite.cancel("OFF")
+let suiteSentence=MemoryInput();suiteSentence.omitPlainValue=true;suiteSentence.value="😀 Hello there.";suiteSentence.caret=CFRange(location:8,length:0);suiteSentence.activate();word(suiteSentence,"world")
+check(suiteSentence.value=="😀 Hello world there." && suiteSentence.captureDiagnostics.insertions==1,"full-range UTF16 reader preserves existing surrounding sentence")
+suiteSentence.cancel("OFF")
+let suiteReplace=MemoryInput();suiteReplace.omitPlainValue=true;suiteReplace.selectedTextWritable=false;suiteReplace.value="Hello old friend.";suiteReplace.caret=CFRange(location:6,length:3);suiteReplace.activate();word(suiteReplace,"world")
+check(suiteReplace.value=="Hello world friend." && suiteReplace.unresolvedWrites.isEmpty,"full-range provider supports one verified value/caret replacement")
+suiteReplace.cancel("OFF")
+let suiteCorrection=MemoryInput();suiteCorrection.omitPlainValue=true;suiteCorrection.activate();word(suiteCorrection,"world");let ownedSuite=suiteCorrection.lastOwnedWord!;suiteCorrection.cancel("OFF")
+suiteCorrection.lastOwnedWord=AppDelegate.OwnedWord(field:ownedSuite.field,pid:ownedSuite.pid,range:ownedSuite.range,alternatives:["world","cat","test"],fingerprint:ownedSuite.fingerprint)
+suiteCorrection.selectCandidate(NSButton(title:"cat",target:nil,action:nil));suiteCorrection.selectCandidate(NSButton(title:"test",target:nil,action:nil))
+check(suiteCorrection.value=="test " && suiteCorrection.unresolvedWrites.isEmpty && suiteCorrection.captureDiagnostics.correctionResult=="confirmed","two full-range corrections replace rather than append and resolve each receipt")
+for configure in [
+ { (o:MemoryInput) in o.textSuiteReadable=false },
+ { (o:MemoryInput) in o.missingCharacterCount=true },
+ { (o:MemoryInput) in o.forcedCharacterCount = -1 },
+ { (o:MemoryInput) in o.forcedCharacterCount = 1_000_001 },
+ { (o:MemoryInput) in o.truncatedTextSuite=true },
+ { (o:MemoryInput) in o.afterTextSuiteRead={o.value += "!"} },
+] {
+ let o=MemoryInput();o.omitPlainValue=true;o.value="Hello";o.caret=CFRange(location:5,length:0);configure(o);o.activate();word(o,"world")
+ check(o.captureDiagnostics.writeAttempts==0 && o.unresolvedWrites.isEmpty && o.captureDiagnostics.lastTargetRefusal=="contentEvidenceUnavailable","missing, invalid, truncated or changing full-range evidence refuses with zero writes")
+ o.cancel("OFF")
+}
+for error in [AXError.apiDisabled,.cannotComplete,.notImplemented] {
+ let o=MemoryInput();o.omitPlainValue=true;o.plainValueError=error;o.activate();word(o,"cat")
+ check(o.captureDiagnostics.writeAttempts==0 && o.fullRangeReads==0,"permission/provider failures never become text-suite fallback")
+ o.cancel("OFF")
+}
+let suiteNoOp=MemoryInput();suiteNoOp.omitPlainValue=true;suiteNoOp.acknowledgeSelectedTextWithoutEditing=true;suiteNoOp.activate();word(suiteNoOp,"cat");word(suiteNoOp,"world")
+check(suiteNoOp.value.isEmpty && suiteNoOp.captureDiagnostics.writeAttempts==1 && suiteNoOp.unresolvedWrites.count==1 && suiteNoOp.queuedWords.count==1,"full-range no-op ACK remains a single uncertain mutation with next word unsent")
+suiteNoOp.cancel("OFF")
+let suiteSecure=MemoryInput();suiteSecure.omitPlainValue=true;suiteSecure.simulatedSecureInput=true;suiteSecure.activate();word(suiteSecure,"cat")
+check(suiteSecure.captureDiagnostics.writeAttempts==0 && suiteSecure.fullRangeReads==0,"secure context rejects before any full-range content read")
+suiteSecure.cancel("OFF")
+print("PASS authoritative text-suite fallback; total \(checks)")
+
+let ordinary=MemoryInput();ordinary.activate();ordinary.insertionTransport = .keyboard;ordinary.acknowledgeSelectedTextWithoutEditing=true
+for w in ["cat","world","auto"] {word(ordinary,w)}
+check(ordinary.value=="cat world auto " && ordinary.captureDiagnostics.insertions==3 && ordinary.unresolvedWrites.isEmpty,"normal input transport verifies three words despite no-op advertised AX setter")
+check(ordinary.postedTextPIDs==[40001,40001,40001] && ordinary.attributeNamesSet.isEmpty && ordinary.captureDiagnostics.lastInsertionBackend=="targetedKeyboard","one PID-targeted dispatch per word with no AX text mutation")
+ordinary.cancel("OFF")
+let keyboardSuite=MemoryInput();keyboardSuite.omitPlainValue=true;keyboardSuite.value="😀 Hello there.";keyboardSuite.caret=CFRange(location:8,length:0);keyboardSuite.activate();keyboardSuite.insertionTransport = .keyboard;word(keyboardSuite,"world")
+check(keyboardSuite.value=="😀 Hello world there." && keyboardSuite.captureDiagnostics.insertions==1 && keyboardSuite.unresolvedWrites.isEmpty,"keyboard dispatch uses full-range snapshot for sentence plan and independent receipt")
+keyboardSuite.cancel("OFF")
+let postDenied=MemoryInput();postDenied.activate();postDenied.insertionTransport = .keyboard;postDenied.simulatedPostAccess=false;word(postDenied,"cat")
+check(postDenied.postedTextPIDs.isEmpty && postDenied.captureDiagnostics.writeAttempts==0 && postDenied.attributeNamesSet.isEmpty,"missing existing event permission refuses without requesting or alternate mutation")
+postDenied.cancel("OFF")
+let keyboardNoOp=MemoryInput();keyboardNoOp.activate();keyboardNoOp.insertionTransport = .keyboard;keyboardNoOp.acknowledgePostedTextWithoutEditing=true;word(keyboardNoOp,"cat");word(keyboardNoOp,"world")
+check(keyboardNoOp.value.isEmpty && keyboardNoOp.postedTextPIDs==[40001] && keyboardNoOp.unresolvedWrites.count==1 && keyboardNoOp.queuedWords.count==1,"unconfirmed keyboard delivery has one dispatch and no retry or AX fallback")
+keyboardNoOp.cancel("OFF")
+let postChanged=MemoryInput();postChanged.activate();postChanged.insertionTransport = .keyboard;check(postChanged.acquireTarget(),"keyboard target acquired before focus race");postChanged.pid=40002
+_ = postChanged.insertWord("cat",alternatives:["cat"])
+check(postChanged.postedTextPIDs.isEmpty && postChanged.attributeNamesSet.isEmpty && postChanged.captureDiagnostics.writeAttempts==0,"focus switch before lift cannot send events to another application")
+postChanged.cancel("OFF")
+print("PASS PID-scoped input dispatch ports; total \(checks)")
+
+let delayedCorrection=MemoryInput();delayedCorrection.activate();word(delayedCorrection,"world");let delayedOwned=delayedCorrection.lastOwnedWord!;delayedCorrection.cancel("OFF")
+delayedCorrection.lastOwnedWord=AppDelegate.OwnedWord(field:delayedOwned.field,pid:delayedOwned.pid,range:delayedOwned.range,alternatives:["world","cat","test"],fingerprint:delayedOwned.fingerprint)
+delayedCorrection.insertionTransport = .keyboard;delayedCorrection.holdPostedCaret=true
+delayedCorrection.selectCandidate(NSButton(title:"cat",target:nil,action:nil))
+check(delayedCorrection.value=="cat " && delayedCorrection.unresolvedWrites.count==1 && delayedCorrection.captureDiagnostics.correctionResult=="awaitingReceipt","asynchronous correction waits after one dispatch with no second write")
+delayedCorrection.caret=CFRange(location:4,length:0);RunLoop.current.run(until:Date().addingTimeInterval(0.06))
+check(delayedCorrection.unresolvedWrites.isEmpty && delayedCorrection.captureDiagnostics.correctionResult=="confirmed" && delayedCorrection.lastOwnedWord?.range.length==4,"exact late correction receipt resolves and rebases provenance")
+delayedCorrection.selectCandidate(NSButton(title:"test",target:nil,action:nil))
+check(delayedCorrection.value=="test " && delayedCorrection.unresolvedWrites.isEmpty && delayedCorrection.postedTextPIDs==[40001,40001],"second keyboard correction replaces the owned word instead of appending")
+print("PASS asynchronous correction receipts; total \(checks)")
+
+let cancelledCorrection=MemoryInput();cancelledCorrection.activate();word(cancelledCorrection,"world");let cancelledOwned=cancelledCorrection.lastOwnedWord!;cancelledCorrection.cancel("OFF")
+cancelledCorrection.lastOwnedWord=AppDelegate.OwnedWord(field:cancelledOwned.field,pid:cancelledOwned.pid,range:cancelledOwned.range,alternatives:["world","cat"],fingerprint:cancelledOwned.fingerprint)
+cancelledCorrection.insertionTransport = .keyboard;cancelledCorrection.holdPostedCaret=true;cancelledCorrection.selectCandidate(NSButton(title:"cat",target:nil,action:nil));let cancelledWrite=cancelledCorrection.unresolvedWrites.first!.id
+cancelledCorrection.cancel("OFF");cancelledCorrection.caret=CFRange(location:4,length:0)
+RunLoop.current.run(until:Date().addingTimeInterval(0.06))
+check(cancelledCorrection.unresolvedWrites.map(\.id)==[cancelledWrite] && cancelledCorrection.postedTextPIDs==[40001],"cancelled correction poll cannot resolve or resend a later receipt")
+check(cancelledCorrection.permitsResolvedWrite(cancelledCorrection.ownedField,pid:40001,range:cancelledCorrection.caret,resolvePending:true) && cancelledCorrection.unresolvedWrites.isEmpty,"subsequent exact same-field receipt can safely resolve cancelled correction without another mutation")
+print("PASS correction cancellation tokens; total \(checks)")
+
+let placeholder=MemoryInput();placeholder.accessibleValueOverride="Owned input placeholder";placeholder.activate();placeholder.insertionTransport = .keyboard
+for w in ["cat","world","auto"] {word(placeholder,w)}
+check(placeholder.value=="cat world auto " && placeholder.captureDiagnostics.insertions==3 && placeholder.unresolvedWrites.isEmpty,"contradictory accessible placeholder is never copied into the document or expected receipt")
+check(placeholder.captureDiagnostics.textEvidenceSource=="fullRange" && placeholder.postedTextPIDs==[40001,40001,40001],"full authoritative range resolves placeholder discrepancy across repeat keyboard delivery")
+placeholder.cancel("OFF")
+print("PASS contradictory accessible-value evidence; total \(checks)")

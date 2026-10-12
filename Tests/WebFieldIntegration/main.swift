@@ -10,9 +10,10 @@ import TrackpadBridge
 
 // Owned two-process fixture. `--host` serves an inline page; the default role drives production
 // handlers through real AX. Generated contacts only: no hardware, Chromium or Codex claim.
-let labels=["t":"Swipepad owned textarea","c":"Swipepad owned editable","p":"Swipepad owned prewrap editable"]
+let labels=["s":"Swipepad owned single line","t":"Swipepad owned textarea","c":"Swipepad owned editable","p":"Swipepad owned prewrap editable"]
 let page="""
 <!doctype html><meta charset=utf-8>
+<input id=s aria-label="\(labels["s"]!)" type=text>
 <textarea id=t aria-label="\(labels["t"]!)" rows=3 cols=48></textarea>
 <div id=c role=textbox aria-multiline=true contenteditable=true aria-label="\(labels["c"]!)" style="border:1px solid #888;min-height:2em"></div>
 <div id=p role=textbox aria-multiline=true contenteditable=true aria-label="\(labels["p"]!)" style="border:1px solid #888;min-height:2em;white-space:pre-wrap"></div>
@@ -20,7 +21,7 @@ let page="""
 function seed(id,b64,start,end){
  const text=b64==='-'?'':new TextDecoder().decode(Uint8Array.from(atob(b64),c=>c.charCodeAt(0)));
  const e=document.getElementById(id);e.focus();
- if(id==='t'){e.value=text;e.setSelectionRange(start,end);return true}
+ if(id==='t'||id==='s'){e.value=text;e.setSelectionRange(start,end);return true}
  e.textContent=text;const n=e.firstChild||e,r=document.createRange();
  r.setStart(n,start);r.setEnd(n,end);const s=getSelection();s.removeAllRanges();s.addRange(r);return true}
 </script>
@@ -37,6 +38,11 @@ function seed(id,b64,start,end){
  func webView(_ webView:WKWebView,didFinish navigation:WKNavigation!) {window.makeFirstResponder(web);reply("ready")}
  func handle(_ line:String) {
   let parts=line.split(separator:" ").map(String.init)
+  if parts.count==2,parts[0]=="receipt",labels[parts[1]] != nil {
+   web.evaluateJavaScript("(()=>{const e=document.getElementById('\(parts[1])');return e.tagName==='TEXTAREA'||e.tagName==='INPUT'?e.value:e.textContent})()") {result,error in
+    MainActor.assumeIsolated {self.reply(error==nil ? "value "+Data((result as? String ?? "").utf8).base64EncodedString():"bad")}
+   };return
+  }
   guard parts.count==5,parts[0]=="seed",labels[parts[1]] != nil,
     parts[2]=="-" || parts[2].unicodeScalars.allSatisfy({CharacterSet.alphanumerics.contains($0) || "+/=".unicodeScalars.contains($0)}),
     let start=Int(parts[3]),let end=Int(parts[4]) else {reply("bad");return}
@@ -72,14 +78,24 @@ final class WebFixtureInput:AppDelegate {
  }
 }
 let owner=WebFixtureInput(),app=NSApplication.shared
-owner.liftGraceSeconds=0;owner.insertionTransport = .accessibility
-app.delegate=owner
-UserDefaults.standard.set(true,forKey:"hasLaunched");UserDefaults.standard.set(false,forKey:"showGuide");UserDefaults.standard.set("trackpad",forKey:"inputMode")
+owner.liftGraceSeconds=0
+owner.insertionTransport = CommandLine.arguments.contains("--accessibility-input") ? .accessibility:.keyboard
+if CommandLine.arguments.contains("--preflight") {
+ let session=CGSessionCopyCurrentDictionary() as? [String:Any]
+ print("Fixture preflight: trusted=\(AXIsProcessTrusted()) postAccess=\(owner.canPostText) locked=\(session?["CGSSessionScreenIsLocked"] as? Bool == true) signature=\(owner.runtimeSignatureValid). No field queries or window launch.")
+ exit(0)
+}
+// No production menu/listener launch or persistent preference changes in the driver.
+// Toggle, target checks, recognition and writer run against the exact owned child.
+app.setActivationPolicy(.prohibited)
 let hostProcess=Process(),toHost=Pipe(),fromHost=Pipe()
+let originalFrontmost=NSWorkspace.shared.frontmostApplication
 var replies:[String]=[],frameNumber:Int32=0,syntheticTime=ProcessInfo.processInfo.systemUptime,failures=0
 func finish(_ message:String)->Never {
  if let data=try? JSONEncoder().encode(owner.captureStatusReport()),let json=String(data:data,encoding:.utf8) {print("Stored fixture evidence: "+json)}
- owner.cancel("Quit");try? toHost.fileHandleForWriting.close()
+ owner.cancel("Quit")
+ if NSWorkspace.shared.frontmostApplication?.processIdentifier==hostProcess.processIdentifier {originalFrontmost?.activate(options:[])}
+ try? toHost.fileHandleForWriting.close()
  RunLoop.current.run(until:Date().addingTimeInterval(0.3));if hostProcess.isRunning {hostProcess.terminate()}
  print(message);print("Limits: WebKit owned page, generated contacts; no Chromium, Codex or hardware qualification.");fflush(stdout)
  exit(failures==0 && message.hasPrefix("PASS") ? 0:2)
@@ -109,7 +125,7 @@ func ownedField(_ key:String)->AXUIElement? {
 }
 struct Case {let name,field,seed:String;let location,length:Int;let words:[String];let expected:String}
 var cases:[Case]=[]
-for key in ["t","c","p"] {cases += [
+for key in ["s","t","c","p"] {cases += [
  Case(name:key+" empty",field:key,seed:"",location:0,length:0,words:["cat","world","test"],expected:"cat world test "),
  Case(name:key+" append",field:key,seed:"Hello",location:5,length:0,words:["world"],expected:"Hello world "),
  Case(name:key+" middle",field:key,seed:"Hello there.",location:5,length:0,words:["world","cat","test"],expected:"Hello world cat test there."),
@@ -122,7 +138,7 @@ func runCase(_ c:Case) {
  guard awaitReply(5)=="ok" else {finish("FAIL: owned seed refused for \(c.name)")}
  var target:AXUIElement?;let ready=Date().addingTimeInterval(3)
  while Date()<ready {
-  if let f=ownedField(c.field),owner.attribute(f,kAXValueAttribute) as? String==c.seed,let r=owner.selection(f),r.location==c.location,r.length==c.length {target=f;break}
+  if let f=ownedField(c.field),owner.fieldText(f)==c.seed,let r=owner.selection(f),r.location==c.location,r.length==c.length {target=f;break}
   RunLoop.current.run(until:Date().addingTimeInterval(0.05))
  }
  guard let target else {finish("BLOCKED: owned \(c.name) not exposed as focused field with seeded value/range")}
@@ -136,10 +152,13 @@ func runCase(_ c:Case) {
   let settle=Date().addingTimeInterval(AppDelegate.acceptedWriteSettleSeconds+0.5)
   while owner.pending && Date()<settle {RunLoop.current.run(until:Date().addingTimeInterval(0.05))}
  }
- let observed=owner.attribute(target,kAXValueAttribute) as? String ?? "<unreadable>"
+ let observed=owner.fieldText(target) ?? "<unreadable>"
+ toHost.fileHandleForWriting.write(Data("receipt \(c.field)\n".utf8))
+ let domReply=awaitReply(5)
+ let domValue=domReply.flatMap {$0.hasPrefix("value ") ? Data(base64Encoded:String($0.dropFirst(6))):nil}.flatMap {String(data:$0,encoding:.utf8)}
  let exact=observed==c.expected,spaceEquivalent=observed.replacingOccurrences(of:"\u{00a0}",with:" ")==c.expected
- let d=owner.captureDiagnostics,pass=exact && d.insertions==c.words.count && owner.unresolvedWrites.isEmpty
- print("\(pass ? "PASS":"FAIL") \(c.name): backend=\(d.lastInsertionBackend ?? "none") attempts=\(d.writeAttempts) confirmed=\(d.insertions) exact=\(exact) nbspOnlyDifference=\(!exact && spaceEquivalent) unresolved=\(owner.unresolvedWrites.count) capabilities=\(d.inputCapabilities ?? "none")")
+ let d=owner.captureDiagnostics,pass=exact && domValue==c.expected && d.insertions==c.words.count && owner.unresolvedWrites.isEmpty
+ print("\(pass ? "PASS":"FAIL") \(c.name): backend=\(d.lastInsertionBackend ?? "none") attempts=\(d.writeAttempts) confirmed=\(d.insertions) exactAX=\(exact) exactDOM=\(domValue==c.expected) nbspOnlyDifference=\(!exact && spaceEquivalent) unresolved=\(owner.unresolvedWrites.count) capabilities=\(d.inputCapabilities ?? "none")")
  if !pass {failures += 1}
  if !owner.unresolvedWrites.isEmpty {finish("FAIL: unresolved owned write in \(c.name); remaining cases would be refused by design")}
  owner.cancel("OFF")
@@ -148,6 +167,7 @@ Timer.scheduledTimer(withTimeInterval:0.3,repeats:false) {_ in MainActor.assumeI
  let session=CGSessionCopyCurrentDictionary() as? [String:Any]
  guard session?["CGSSessionScreenIsLocked"] as? Bool != true else {finish("BLOCKED: owned GUI fixture requires unlocked coordinated session; no window launched")}
  guard AXIsProcessTrusted(),!owner.secureInputActive,let executable=Bundle.main.executableURL else {finish("BLOCKED: existing Accessibility trust and Secure Input off required; nothing requested")}
+ guard owner.insertionTransport != .keyboard || owner.canPostText else {finish("BLOCKED: existing keyboard-delivery access required; nothing requested")}
  fromHost.fileHandleForReading.readabilityHandler={handle in
   let lines=String(decoding:handle.availableData,as:UTF8.self).split(separator:"\n").map(String.init)
   DispatchQueue.main.async {MainActor.assumeIsolated {replies += lines}}

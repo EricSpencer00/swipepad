@@ -91,6 +91,11 @@ public struct CaptureDiagnostics: Codable, Sendable {
   public var writeAttempts=0
   public var acceptedMutations=0
   public var contentReadable:Bool?
+  public var valueReadAXError:Int?
+  public var valueReadKind:String?
+  public var textEvidenceSource:String?
+  public var textEvidenceLength:Int?
+  public var rangeTextAXError:Int?
   public var correctionResult:String?
   public var lastInsertionBackend:String?
   public var confirmationWaitMilliseconds=0.0

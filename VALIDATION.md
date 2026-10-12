@@ -1,5 +1,17 @@
 # Prototype validation
 
+## Current input candidate — v0.2.29
+
+The candidate selects ordinary Unicode input addressed to the original application PID before any mutation. An advertised AX selected-text setter is not treated as proof that a controlled composer edits. Keyboard posting has no delivery acknowledgement: the unchanged exact target/content/caret receipt and uncertain-write guards remain mandatory. Correction has the same bounded asynchronous receipt wait. No retry, clipboard, broadcast, Return, new permission grant or security change was added.
+
+The reader prefers complete parameterized document text and validates its character count and UTF-16 span. This covers providers that omit AXValue or expose a placeholder instead. Metadata-only checks do not read field contents. Unsupported text-range APIs can use a consistent plain value; incomplete or conflicting evidence fails closed.
+
+Local qualification: release build, 317 core checks, 501 controlled production-handler checks, and 50 offscreen native receiving checks passed. The native fixture reads/writes real self-owned Cocoa controls and checks their independent text storage/selection. Its focus identity and contacts are ports, and it explicitly uses the AX transport. Cases cover ordinary value, missing value, accessible placeholder, three words including straight `auto`, sentence middle insertion and UTF-16 selected replacement. The offscreen window remained invisible. These counts do not qualify keyboard event delivery, third-party applications, physical accuracy, global hotkeys or desktop focus preservation.
+
+The owned WebKit receiving fixture compiles with single-line input, textarea and two contenteditable styles. It checks exact AX receipts and independent DOM contents, uses generated contacts and confines all lookups to its exact child process. It does not change production preferences, requests no permissions and restores the previous foreground application only if its own child remains frontmost. Its interactive keyboard run is pending human coordination; no GUI result is claimed. The signed candidate is staged separately. Installation is held while the running process retains an uncertain mutation and its on-disk identity is being changed by another development path.
+
+Earlier entries below are historical source-specific results and do not upgrade this candidate's receiving-app or hardware qualification.
+
 ## Shared all-apps identity/access failure
 
 A later native TextEdit activation returned `kAXErrorAPIDisabled` (-25211) from both authoritative roots, with zero field admission and zero writes. The live process and on-disk app had different code hashes/signing requirements; dynamic signature verification explicitly reported that disk code did not match running code. Targeted system evidence also rejected the existing Accessibility code requirement. This supersedes a focus-publication-only explanation for the current all-apps failure. No role, subrole or AXValue inspection was reached, so unsupported text controls are not established. No Codex UI automation occurred.

@@ -9,6 +9,7 @@ import TrackpadBridge
 struct RuntimeHealth:Codable {
   let kind:String,scope:String,runtimeIdentity:String
   let signatureMatchesDisk:Bool,accessibilityTrusted:Bool,monitorInstalled:Bool
+  let keyboardPostAccess:Bool?
 }
 
 @MainActor extension AppDelegate {
@@ -19,7 +20,7 @@ struct RuntimeHealth:Codable {
     return SecCodeCheckValidity(code,SecCSFlags(rawValue:kSecCSStrictValidate),nil)==errSecSuccess
   }
   func runtimeHealth(live:Bool)->RuntimeHealth {
-    RuntimeHealth(kind:"identityPermission",scope:live ? "Live GUI identity and trust; no field queries":"Diagnostic process identity and trust; not the GUI process",runtimeIdentity:captureRuntimeIdentity(),signatureMatchesDisk:runtimeSignatureValid,accessibilityTrusted:AXIsProcessTrusted(),monitorInstalled:globalMonitor != nil)
+    RuntimeHealth(kind:"identityPermission",scope:live ? "Live GUI identity and trust; no field queries":"Diagnostic process identity and trust; not the GUI process",runtimeIdentity:captureRuntimeIdentity(),signatureMatchesDisk:runtimeSignatureValid,accessibilityTrusted:AXIsProcessTrusted(),monitorInstalled:globalMonitor != nil,keyboardPostAccess:canPostText)
   }
   func captureRuntimeIdentity()->String {
     if let captureIdentityCache {return captureIdentityCache}

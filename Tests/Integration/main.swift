@@ -8,6 +8,7 @@ import SwipepadCore
 import TrackpadBridge
 import Darwin
 let delegate = AppDelegate();delegate.liftGraceSeconds=0
+delegate.insertionTransport = .accessibility // This legacy fixture qualifies AX insertion.
 let app = NSApplication.shared
 app.delegate = delegate
 guard CommandLine.arguments.count == 2 || (CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--contact-guards-only") else { print("Use scripts/test-integration.sh to create a fresh owned document."); exit(2) }

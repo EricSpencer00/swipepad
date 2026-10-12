@@ -13,7 +13,10 @@ final class GuidePanel: NSPanel {
 @MainActor final class KeyboardView: OverlayKeyboardView { var showKeys=true }
 @MainActor class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
   enum InsertionTransport { case keyboard, accessibility }
-  var insertionTransport:InsertionTransport = .accessibility // Keyboard-to-PID is experimental until dispatch/focus qualification.
+  // Ordinary text entry goes through the receiving application's input pipeline.
+  // An advertised AX setter can acknowledge without editing a controlled composer.
+  // Select one transport before mutation; never fall back after dispatch.
+  var insertionTransport:InsertionTransport = .keyboard
   static let ownTextEventTag:Int64 = 0x53575044545854
   var status: NSStatusItem!
   var panel: GuidePanel!
@@ -59,6 +62,7 @@ final class GuidePanel: NSPanel {
   var unresolvedWrites:[UnresolvedWrite]=[]
   var strokeCancellationGeneration=0
   var sessionGeneration=0
+  var correctionPollToken=0
   var pendingWriteID:UUID?
   struct QueuedWord {let word:String;let alternatives:[String];let field:AXUIElement;let pid:pid_t}
   var queuedWords:[QueuedWord]=[]
@@ -87,6 +91,7 @@ final class GuidePanel: NSPanel {
   // OS-backed in production; sandbox ports control this flag without changing the OS.
   var secureInputActive:Bool {IsSecureEventInputEnabled()}
   var runtimeSignatureValid:Bool {checkRuntimeSignature()}
+  var canPostText:Bool {CGPreflightPostEventAccess()}
   let words = WordVocabulary.words
   lazy var gestureLexicon = GestureLexicon(words:words)
   func validateMenuItem(_ menuItem:NSMenuItem) -> Bool {
@@ -235,10 +240,49 @@ final class GuidePanel: NSPanel {
   }
   func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
-    guard measureAX({AXUIElementCopyAttributeValue(element, name as CFString, &value)}) == .success else {
-      return nil
+    let result=measureAX({AXUIElementCopyAttributeValue(element,name as CFString,&value)})
+    if name==kAXValueAttribute {
+      captureDiagnostics.valueReadAXError=Int(result.rawValue)
+      captureDiagnostics.valueReadKind=value==nil ? "nil":(value is String ? "string":(value is NSAttributedString ? "attributedString":"other"))
     }
+    guard result == .success else {return nil}
     return value
+  }
+  func parameterizedText(_ field:AXUIElement,range:CFRange)->String? {
+    var copy=range
+    guard let parameter=AXValueCreate(.cfRange,&copy) else {return nil}
+    var value:CFTypeRef?
+    let result=measureAX({AXUIElementCopyParameterizedAttributeValue(field,kAXStringForRangeParameterizedAttribute as CFString,parameter,&value)})
+    captureDiagnostics.rangeTextAXError=Int(result.rawValue)
+    guard result == .success else {return nil}
+    return value as? String
+  }
+  func characterCount(_ field:AXUIElement)->Int? {
+    guard let value=attribute(field,kAXNumberOfCharactersAttribute),CFGetTypeID(value)==CFNumberGetTypeID(),let number=value as? NSNumber else {return nil}
+    let count=number.intValue
+    guard count>=0,count<=1_000_000,number.doubleValue==Double(count) else {return nil}
+    return count
+  }
+  // A provider may omit AXValue while exposing its full authoritative text suite.
+  // Never infer empty contents from a caret or accept a truncated/context-only range.
+  func fieldText(_ field:AXUIElement)->String? {
+    captureDiagnostics.textEvidenceSource=nil;captureDiagnostics.textEvidenceLength=nil;captureDiagnostics.rangeTextAXError=nil
+    captureDiagnostics.valueReadAXError=nil;captureDiagnostics.valueReadKind=nil
+    let direct=attribute(field,kAXValueAttribute) as? String
+    if let error=captureDiagnostics.valueReadAXError,error != 0 && error != Int(AXError.noValue.rawValue) && error != Int(AXError.attributeUnsupported.rawValue) {return nil}
+    let count=characterCount(field)
+    if let count {
+      // Prefer document text to a provider's accessible value/placeholder. The two
+      // can even have the same length, so length agreement alone is insufficient.
+      if let text=parameterizedText(field,range:CFRange(location:0,length:count)) {
+        guard text.utf16.count==count,characterCount(field)==count else {return nil}
+        captureDiagnostics.textEvidenceSource="fullRange";captureDiagnostics.textEvidenceLength=count;return text
+      }
+      let error=captureDiagnostics.rangeTextAXError
+      guard error==Int(AXError.noValue.rawValue) || error==Int(AXError.parameterizedAttributeUnsupported.rawValue) || error==Int(AXError.attributeUnsupported.rawValue) else {return nil}
+    }
+    guard let text=direct,count==nil || count==text.utf16.count else {return nil}
+    captureDiagnostics.textEvidenceSource="value";captureDiagnostics.textEvidenceLength=text.utf16.count;return text
   }
   var currentApplicationPID:pid_t? {NSWorkspace.shared.frontmostApplication?.processIdentifier}
   func attributeWritable(_ element:AXUIElement,_ name:String)->Bool {
@@ -288,11 +332,11 @@ final class GuidePanel: NSPanel {
     var valueSettable:DarwinBoolean=false,rangeSettable:DarwinBoolean=false
     let valueWritable=measureAX({AXUIElementIsAttributeSettable(element,kAXValueAttribute as CFString,&valueSettable)}) == .success && valueSettable.boolValue
     let rangeWritable=measureAX({AXUIElementIsAttributeSettable(element,kAXSelectedTextRangeAttribute as CFString,&rangeSettable)}) == .success && rangeSettable.boolValue
-    // Text input need not expose writable AXValue: normal typing uses the app input pipeline.
-    // Still require a readable caret/value and explicit editability before event delivery.
-    let editable = (attribute(element,"AXEditable") as? Bool) == true
-    let keyboardWritable = insertionTransport == .keyboard && CGPreflightPostEventAccess() && editable && selection(element) != nil && (attribute(element,kAXValueAttribute) as? String) != nil
-    return (role, subrole, writable || (valueWritable && rangeWritable) || keyboardWritable)
+    // Metadata checks never read field contents. Admission checks the authoritative
+    // content/caret only AFTER rejecting secure, read-only and unsupported fields.
+    let editable = attribute(element,"AXEditable") as? Bool
+    let keyboardWritable = insertionTransport == .keyboard && canPostText && editable == true
+    return (role, subrole, editable == false ? false:(writable || (valueWritable && rangeWritable) || keyboardWritable))
   }
   func supportedField(_ element: AXUIElement) -> Bool {
     let metadata = fieldMetadata(element)
@@ -350,6 +394,7 @@ final class GuidePanel: NSPanel {
     showFeedback(reason=="protectionMetadataUnavailable" ? "Protection metadata unavailable · swiping stopped":"Password or Secure Input · swiping stopped")
   }
   @objc func toggle() {
+    correctionPollToken += 1
     let wasWaiting = !active && captureDiagnostics.stage=="awaitingFocusPublication"
     abandonActivation();sessionGeneration += 1
     if wasWaiting {return}
@@ -368,6 +413,12 @@ final class GuidePanel: NSPanel {
       updateModeIndicator()
       showFeedback("Accessibility required · open Setup to connect Swipepad")
       showActivationRefusal(statusReason ?? "Accessibility required · typing stayed off")
+      return
+    }
+    guard insertionTransport != .keyboard || canPostText else {
+      captureDiagnostics.stage="activationRefused";captureDiagnostics.result="keyboardPostAccessUnavailable"
+      showFeedback("Keyboard delivery access unavailable · typing stayed off")
+      showActivationRefusal(statusReason ?? "Keyboard delivery unavailable · typing stayed off")
       return
     }
     if secureContextActive() {exitSecureContext();showActivationRefusal(statusReason ?? "Secure input · typing stayed off");return}
@@ -505,7 +556,7 @@ final class GuidePanel: NSPanel {
       showFeedback("This field does not expose safe editable input · see Setup diagnostics");return false
     }
     // Qualify content only for a requested activation/new stroke, never in the metadata doctor.
-    let content=attribute(field,kAXValueAttribute) as? String
+    let content=fieldText(field)
     captureDiagnostics.contentReadable=content != nil
     guard let content else {
       captureDiagnostics.stage="fieldRefused";recordTargetRefusal("contentEvidenceUnavailable")
@@ -735,7 +786,7 @@ final class GuidePanel: NSPanel {
     return FocusGuard.permits(originalPID:originalPID,currentPID:pid,sameElement:CFEqual(target,current),secure:secureInputActive,editable:supportedField(current))
   }
   func fingerprint(_ field:AXUIElement)->Data? {
-    guard supportedField(field),let text=attribute(field,kAXValueAttribute) as? String else {return nil}
+    guard supportedField(field),let text=fieldText(field) else {return nil}
     return Data(SHA256.hash(data:Data(text.utf8))) // Memory only; neither field text nor digest is logged.
   }
   func identity(_ field:AXUIElement,pid:pid_t)->Bool {
@@ -791,11 +842,14 @@ final class GuidePanel: NSPanel {
     for event in [down,up] {event.flags=[];event.setIntegerValueField(.eventSourceUserData,value:Self.ownTextEventTag)}
     return (down,up)
   }
+  func postText(_ events:(CGEvent,CGEvent),to pid:pid_t) {
+    events.0.postToPid(pid);events.1.postToPid(pid)
+  }
   func replaceSelectedText(_ field:AXUIElement,pid:pid_t,range:CFRange,inserted:String,expectedBefore:String?=nil)->AXError {
     guard runtimeSignatureValid else {stopForChangedBuild();return .cannotComplete}
     guard identity(field,pid:pid),let current=selection(field),current.location==range.location,current.length==range.length,
       permitsResolvedWrite(field,pid:pid,range:range) else {return .cannotComplete}
-    let before=attribute(field,kAXValueAttribute) as? String
+    let before=fieldText(field)
     guard let before=before,expectedBefore.map({$0==before}) ?? true,
       let expected=TextReplacement.replacing(before,location:range.location,length:range.length,with:inserted) else {return .cannotComplete}
     let valueBackend=attributeWritable(field,kAXValueAttribute) && attributeWritable(field,kAXSelectedTextRangeAttribute)
@@ -805,15 +859,15 @@ final class GuidePanel: NSPanel {
     // can bypass a controlled editor's input handling and write its accessible
     // representation back as document text. Choose once; never switch after mutation.
     let useValueBackend=valueBackend && !directBackend
-    guard (keyboardBackend ? CGPreflightPostEventAccess() : (valueBackend || directBackend)),identity(field,pid:pid),let checked=selection(field),checked.location==range.location,checked.length==range.length,
-      attribute(field,kAXValueAttribute) as? String==before else {return .cannotComplete}
+    guard (keyboardBackend ? canPostText : (valueBackend || directBackend)),identity(field,pid:pid),let checked=selection(field),checked.location==range.location,checked.length==range.length,
+      fieldText(field)==before else {return .cannotComplete}
     // Allocate before recording a transaction; never retry AX after posting an event.
     let events: (CGEvent,CGEvent)?
     if keyboardBackend {
       guard let prepared=Self.textEvents(inserted) else {return .cannotComplete}
       events=prepared
     } else {events=nil}
-    guard identity(field,pid:pid),let finalRange=selection(field),finalRange.location==range.location,finalRange.length==range.length,attribute(field,kAXValueAttribute) as? String==before else {return .cannotComplete}
+    guard identity(field,pid:pid),let finalRange=selection(field),finalRange.location==range.location,finalRange.length==range.length,fieldText(field)==before else {return .cannotComplete}
     // Web editing providers may represent ONLY the newly inserted trailing space
     // as NBSP. Accept that exact alternate full-value receipt, not general normalization.
     let separatorValue=inserted.hasSuffix(" ") ? TextReplacement.replacing(expected,location:range.location+inserted.utf16.count-1,length:1,with:"\u{00a0}"):nil
@@ -823,7 +877,7 @@ final class GuidePanel: NSPanel {
     captureDiagnostics.lastInsertionBackend=keyboardBackend ? "targetedKeyboard":(useValueBackend ? "valueAndCaret":"selectedText")
     let result:AXError
     if let events {
-      events.0.postToPid(pid);events.1.postToPid(pid)
+      postText(events,to:pid)
       // Posting has no delivery receipt. Existing exact content/caret polling is mandatory.
       result = .success
     } else if useValueBackend {
@@ -866,7 +920,7 @@ final class GuidePanel: NSPanel {
   }
   func insertWord(_ word:String,alternatives:[String])->Bool {
     guard active,validTarget(),let target,let original=originalSelection else {cancel("Focus or caret changed · no word inserted");return false}
-    guard let before=attribute(target,kAXValueAttribute) as? String,
+    guard let before=fieldText(target),
       originalContentDigest==Data(SHA256.hash(data:Data(before.utf8))) else {cancel("Content changed during swipe · no word inserted");return false}
     guard let plan=try? WordInsertion.plan(before,location:original.location,length:original.length,word:word).get() else {cancel("Use a word boundary or select a whole word · no word inserted");return false}
     let inserted=plan.text
@@ -961,23 +1015,46 @@ final class GuidePanel: NSPanel {
     guard let value=AXValueCreate(.cfRange,&range),setAttribute(owned.field,kAXSelectedTextRangeAttribute,value) == .success,
       identity(owned.field,pid:owned.pid),let selected=selection(owned.field),selected.location==range.location,selected.length==range.length,
       fingerprint(owned.field)==owned.fingerprint else {restoreCorrectionCaret(owned,selectedRange:range);lastOwnedWord=nil;cancel("Correction stopped · field changed");return}
-    guard let correctionBefore=attribute(owned.field,kAXValueAttribute) as? String,
+    guard let correctionBefore=fieldText(owned.field),
       Data(SHA256.hash(data:Data(correctionBefore.utf8)))==owned.fingerprint else {restoreCorrectionCaret(owned,selectedRange:range);rejectCorrection("contentChanged");return}
     let inserted=(owned.leadingSeparator ? " ":"")+sender.title+(owned.trailingSeparator ? " ":"")
     let previousIDs=Set(unresolvedWrites.map(\.id))
-    let result=replaceSelectedText(owned.field,pid:owned.pid,range:range,inserted:inserted,expectedBefore:correctionBefore)
+    _=replaceSelectedText(owned.field,pid:owned.pid,range:range,inserted:inserted,expectedBefore:correctionBefore)
     let transaction=unresolvedWrites.last(where:{!previousIDs.contains($0.id) && $0.pid==owned.pid && CFEqual($0.field,owned.field)})
-    guard result == .success,let transaction,identity(owned.field,pid:owned.pid),let next=selection(owned.field),
-      InsertionContinuation.permits(originalLocation:range.location,insertedUTF16Count:transaction.expectedCaret-range.location,resultLocation:next.location,resultLength:next.length,sameTarget:true),permitsResolvedWrite(owned.field,pid:owned.pid,range:next,resolvePending:true) else {
-      if transaction==nil {restoreCorrectionCaret(owned,selectedRange:range)}
-      lastOwnedWord=nil;captureDiagnostics.correctionResult=transaction==nil ? "prewriteRefused":"postwriteUnconfirmed"
-      cancel("Correction stopped · check receiving field");return
+    guard let transaction else {
+      restoreCorrectionCaret(owned,selectedRange:range)
+      captureDiagnostics.correctionResult="prewriteRefused";lastOwnedWord=nil
+      cancel("Correction stopped · no text sent");return
     }
-    if active {originalSelection=next}
+    // Input dispatch is asynchronous. A successful acknowledgement or an AX error
+    // is never a reason to resend; wait only for this transaction's exact receipt.
+    if confirmCorrection(owned,transaction:transaction) {return}
+    correctionPollToken += 1
+    pollCorrection(owned,writeID:transaction.id,token:correctionPollToken,deadline:ProcessInfo.processInfo.systemUptime+0.25+Self.acceptedWriteSettleSeconds)
+  }
+  func confirmCorrection(_ owned:OwnedWord,transaction:UnresolvedWrite)->Bool {
+    guard identity(owned.field,pid:owned.pid),let next=selection(owned.field),
+      InsertionContinuation.permits(originalLocation:transaction.originalRange.location,insertedUTF16Count:transaction.expectedCaret-transaction.originalRange.location,resultLocation:next.location,resultLength:next.length,sameTarget:true),permitsResolvedWrite(owned.field,pid:owned.pid,range:next,resolvePending:true) else {return false}
+    let range=transaction.originalRange
     if let digest=fingerprint(owned.field) {lastOwnedWord=OwnedWord(field:owned.field,pid:owned.pid,range:CFRange(location:range.location,length:transaction.expectedCaret-range.location),alternatives:owned.alternatives,fingerprint:digest,leadingSeparator:owned.leadingSeparator,trailingSeparator:owned.trailingSeparator)} else {lastOwnedWord=nil}
     captureDiagnostics.correctionResult="confirmed"
     label.stringValue=active ? "Last word corrected · swipe next" : "Last word corrected"
     if !active {panel?.orderOut(nil)}
+    return true
+  }
+  func pollCorrection(_ owned:OwnedWord,writeID:UUID,token:Int,deadline:Double) {
+    guard !active,token==correctionPollToken,let transaction=unresolvedWrites.first(where:{$0.id==writeID}) else {return}
+    guard runtimeSignatureValid,identity(owned.field,pid:owned.pid) else {
+      lastOwnedWord=nil;captureDiagnostics.correctionResult="postwriteUnconfirmed"
+      cancel("Correction stopped · check receiving field");return
+    }
+    if confirmCorrection(owned,transaction:transaction) {return}
+    guard ProcessInfo.processInfo.systemUptime<deadline else {
+      lastOwnedWord=nil;captureDiagnostics.correctionResult="postwriteUnconfirmed"
+      cancel("Correction not confirmed · nothing retried");return
+    }
+    captureDiagnostics.correctionResult="awaitingReceipt"
+    DispatchQueue.main.asyncAfter(deadline:.now()+0.02) {[weak self] in self?.pollCorrection(owned,writeID:writeID,token:token,deadline:deadline)}
   }
   func rejectCorrection(_ reason:String) {captureDiagnostics.correctionResult=reason;lastOwnedWord=nil;cancel("Correction unavailable · "+reason)}
   @objc func stopOrDismiss() {if !active {lastOwnedWord=nil;panel?.orderOut(nil)}}
@@ -1031,6 +1108,7 @@ final class GuidePanel: NSPanel {
   }
 
   func cancel(_ reason: String) {
+    correctionPollToken += 1
     abandonActivation()
     deferredLift=nil;liftTimerGeneration += 1
     if active && reason != "OFF" && reason != "Quit" {

@@ -12,7 +12,7 @@ swift build --scratch-path "$ci_output/build" -c release --disable-sandbox -j 1 
 ci_bin=$(swift build --scratch-path "$ci_output/build" -c release --disable-sandbox --show-bin-path)
 "$ci_bin/SwipepadChecks" > "$ci_output/core.log" 2>&1
 ci_sdk=$(xcrun --show-sdk-path)
-for ci_kind in RepeatFlow WebFieldIntegration; do
+for ci_kind in RepeatFlow NativeTextEvidence WebFieldIntegration; do
  swiftc -module-cache-path "$ci_output/modules" -swift-version 6 -default-isolation MainActor \
   -I "$ci_bin/Modules" -I "$ci_bin/TrackpadBridge.build" \
   Sources/Swipepad/App.swift Sources/Swipepad/DoctorSupport.swift Sources/Swipepad/SetupView.swift Sources/Swipepad/Overlay.swift \
@@ -23,4 +23,4 @@ done
 printf 'PASS Apple build/core/port-handler checks at %s\n' "$ci_head"
 tail -n 1 "$ci_output/core.log"
 tail -n 1 "$ci_output/repeat.log"
-printf 'Owned web fixture compiled, not run. GUI/physical acceptance requires coordinated execution.\nArtifacts: %s\n' "$ci_output"
+printf 'Owned native/web fixtures compiled, not run. Receiving-app/physical acceptance requires coordinated execution.\nArtifacts: %s\n' "$ci_output"
