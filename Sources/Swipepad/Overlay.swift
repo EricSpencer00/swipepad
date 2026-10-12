@@ -3,27 +3,73 @@ import ApplicationServices
 import SwipepadCore
 
 @MainActor class OverlayKeyboardView: NSView {
+  enum Edge {case left,right,bottom,top}
   var path:[Point]=[]
   var opacity:CGFloat=0.55
+  /// The part of the keyboard shown. Visible keys are stretched to fill the canvas.
+  var viewport:KeyboardViewport = .full { didSet {needsDisplay=true} }
+  /// Layout preview only: draws the whole keyboard with a crop frame whose edges can be dragged.
+  var editable=false
+  private var dragEdge:Edge?
   override func acceptsFirstMouse(for event:NSEvent?) -> Bool {true}
-  override func mouseDown(with event:NSEvent) {} // Absorb clicks; physical contacts determine letters.
-  override func mouseUp(with event:NSEvent) {}
-  override func mouseDragged(with event:NSEvent) {}
+  override func mouseDown(with event:NSEvent) {
+    guard editable else {return} // Absorb clicks; physical contacts determine letters.
+    dragEdge=nearestEdge(keyboardPoint(event))
+  }
+  override func mouseDragged(with event:NSEvent) {
+    guard editable,let edge=dragEdge else {return}
+    let p=keyboardPoint(event),v=viewport,m=KeyboardViewport.minimumSpan
+    let next:KeyboardViewport
+    switch edge {
+    case .left: next=KeyboardViewport(minX:min(max(p.x,0),v.maxX-m),minY:v.minY,maxX:v.maxX,maxY:v.maxY)
+    case .right: next=KeyboardViewport(minX:v.minX,minY:v.minY,maxX:max(min(p.x,1),v.minX+m),maxY:v.maxY)
+    case .bottom: next=KeyboardViewport(minX:v.minX,minY:min(max(p.y,0),v.maxY-m),maxX:v.maxX,maxY:v.maxY)
+    case .top: next=KeyboardViewport(minX:v.minX,minY:v.minY,maxX:v.maxX,maxY:max(min(p.y,1),v.minY+m))
+    }
+    viewport=next
+  }
+  override func mouseUp(with event:NSEvent) {dragEdge=nil}
+  func keyboardPoint(_ event:NSEvent) -> Point {
+    let l=convert(event.locationInWindow,from:nil)
+    return Point(Double(l.x/max(bounds.width,1)),Double(l.y/max(bounds.height,1)))
+  }
+  /// Edge of the crop frame under the pointer, within 12 points.
+  func nearestEdge(_ p:Point) -> Edge? {
+    let v=viewport,tolerance=12.0
+    let candidates:[(Edge,Double)] = [
+      (.left,abs(p.x-v.minX)*bounds.width),(.right,abs(p.x-v.maxX)*bounds.width),
+      (.bottom,abs(p.y-v.minY)*bounds.height),(.top,abs(p.y-v.maxY)*bounds.height)]
+    let alongY=p.y >= v.minY-0.05 && p.y <= v.maxY+0.05, alongX=p.x >= v.minX-0.05 && p.x <= v.maxX+0.05
+    return candidates.filter {edge,distance in
+      guard distance <= tolerance else {return false}
+      switch edge {
+      case .left,.right: return alongY
+      case .bottom,.top: return alongX
+      }
+    }.min {$0.1 < $1.1}?.0
+  }
   override func draw(_ dirtyRect:NSRect) {
     let workspace=NSWorkspace.shared
     let solid=workspace.accessibilityDisplayShouldReduceTransparency || workspace.accessibilityDisplayShouldIncreaseContrast
-    let keyWidth=bounds.width/10*0.86,keyHeight=bounds.height/3*0.68
-    let currentKey=path.last.flatMap {Keyboard.nearestKey($0)}
+    // Editing draws the full keyboard; otherwise the cropped part fills the canvas.
+    let shown:KeyboardViewport = editable ? .full : viewport
+    let keyWidth=bounds.width/(10*shown.spanX)*0.86,keyHeight=bounds.height/(3*shown.spanY)*0.68
+    let currentKey=path.last.flatMap {Keyboard.nearestKey(viewport.toKeyboard($0))}
     for (key,point) in Keyboard.keys {
-      let rect=NSRect(x:point.x*bounds.width-keyWidth/2,y:point.y*bounds.height-keyHeight/2,width:keyWidth,height:keyHeight)
-      (currentKey == key ? NSColor.systemBlue : NSColor.controlBackgroundColor).withAlphaComponent(solid ? 1 : opacity).setFill()
+      let inside=viewport.contains(point)
+      if !editable && !inside {continue}
+      let p=editable ? point : shown.toPad(point)
+      let rect=NSRect(x:p.x*bounds.width-keyWidth/2,y:p.y*bounds.height-keyHeight/2,width:keyWidth,height:keyHeight)
+      let fade:CGFloat=(editable && !inside) ? 0.3 : 1
+      (currentKey == key ? NSColor.systemBlue : NSColor.controlBackgroundColor).withAlphaComponent((solid ? 1 : opacity)*fade).setFill()
       let outline=NSBezierPath(roundedRect:rect,xRadius:10,yRadius:10);outline.fill()
-      NSColor.separatorColor.withAlphaComponent(solid ? 1 : 0.7).setStroke();outline.lineWidth=solid ? 2 : 1;outline.stroke()
+      NSColor.separatorColor.withAlphaComponent((solid ? 1 : 0.7)*fade).setStroke();outline.lineWidth=solid ? 2 : 1;outline.stroke()
       let text=String(key).uppercased() as NSString
-      let attributes:[NSAttributedString.Key:Any]=[.font:NSFont.systemFont(ofSize:min(32,max(18,bounds.width*0.022)),weight:.medium),.foregroundColor:NSColor.labelColor]
+      let attributes:[NSAttributedString.Key:Any]=[.font:NSFont.systemFont(ofSize:min(32,max(18,bounds.width*0.022)),weight:.medium),.foregroundColor:NSColor.labelColor.withAlphaComponent(fade)]
       let size=text.size(withAttributes:attributes)
       text.draw(at:NSPoint(x:rect.midX-size.width/2,y:rect.midY-size.height/2),withAttributes:attributes)
     }
+    if editable {drawCropFrame()}
     if let first=path.first,path.count>1 {
       let line=NSBezierPath();line.move(to:NSPoint(x:first.x*bounds.width,y:first.y*bounds.height))
       for segment in RenderCurve.segments(path) {
@@ -45,6 +91,18 @@ import SwipepadCore
       let cursor=NSBezierPath(ovalIn:NSRect(x:center.x-8,y:center.y-8,width:16,height:16));cursor.lineWidth=2;cursor.stroke()
       let cross=NSBezierPath();cross.move(to:NSPoint(x:center.x-12,y:center.y));cross.line(to:NSPoint(x:center.x+12,y:center.y))
       cross.move(to:NSPoint(x:center.x,y:center.y-12));cross.line(to:NSPoint(x:center.x,y:center.y+12));cross.lineWidth=1.5;cross.stroke()
+    }
+  }
+  /// Crop frame with grab handles at the middle of each edge.
+  func drawCropFrame() {
+    let v=viewport
+    let frame=NSRect(x:v.minX*bounds.width,y:v.minY*bounds.height,width:v.spanX*bounds.width,height:v.spanY*bounds.height)
+    let outline=NSBezierPath(rect:frame);outline.lineWidth=2
+    NSColor.systemBlue.setStroke();outline.stroke()
+    let handles=[NSPoint(x:frame.minX,y:frame.midY),NSPoint(x:frame.maxX,y:frame.midY),NSPoint(x:frame.midX,y:frame.minY),NSPoint(x:frame.midX,y:frame.maxY)]
+    for h in handles {
+      let grip=NSBezierPath(roundedRect:NSRect(x:h.x-5,y:h.y-14,width:10,height:28),xRadius:5,yRadius:5)
+      NSColor.systemBlue.setFill();grip.fill()
     }
   }
 }
@@ -83,6 +141,8 @@ import SwipepadCore
       return (x.isNull ? 0 : x.width*x.height)<(y.isNull ? 0 : y.width*y.height)
     } ?? NSScreen.main
   }
+  /// The keyboard part the pad maps onto, shared by the screen overlay, the panel and recognition.
+  var keyboardViewport:KeyboardViewport { KeyboardViewport(stored:UserDefaults.standard.array(forKey:"keyboardViewport") as? [Double]) }
   func displayKey(_ screen:NSScreen) -> String {"overlayLayout."+String(describing:screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] ?? "default")}
   func defaultOverlayRect(_ screen:NSScreen) -> NSRect {
     let visible=screen.visibleFrame
@@ -111,6 +171,7 @@ import SwipepadCore
       overlayPanel=overlay
     }
     overlayKeyboard.opacity=CGFloat(UserDefaults.standard.double(forKey:"overlayOpacity"))
+    overlayKeyboard.viewport=keyboardViewport
     overlayKeyboard.path=[];overlayKeyboard.needsDisplay=true
     overlayPanel?.setFrame(rect,display:true);overlayPanel?.orderFrontRegardless()
     guideKeyboardHeight?.constant=0
@@ -141,6 +202,7 @@ import SwipepadCore
     window.minSize=NSSize(width:420,height:260);window.maxSize=screen.visibleFrame.size
     let preview=LayoutPreviewView(frame:NSRect(x:0,y:0,width:rect.width+32,height:rect.height+100))
     preview.canvas.opacity=CGFloat(UserDefaults.standard.double(forKey:"overlayOpacity"))
+    preview.canvas.editable=true;preview.canvas.viewport=keyboardViewport
     preview.controls.addArrangedSubview(NSTextField(labelWithString:"Key opacity"))
     let slider=NSSlider(value:Double(preview.canvas.opacity),minValue:0.25,maxValue:1,target:self,action:#selector(changeOverlayOpacity(_:)))
     slider.widthAnchor.constraint(equalToConstant:100).isActive=true
@@ -163,11 +225,13 @@ import SwipepadCore
     }
     UserDefaults.standard.set([(rect.minX-visible.minX)/visible.width,(rect.minY-visible.minY)/visible.height,rect.width/visible.width,rect.height/visible.height],forKey:displayKey(screen))
     UserDefaults.standard.set(Double(preview.canvas.opacity),forKey:"overlayOpacity")
+    UserDefaults.standard.set(preview.canvas.viewport.stored,forKey:"keyboardViewport")
     window.close()
   }
   @objc func resetOverlayLayout() {
     guard let screen=layoutPanel?.screen else {return}
     UserDefaults.standard.removeObject(forKey:displayKey(screen))
+    UserDefaults.standard.removeObject(forKey:"keyboardViewport")
     presentOverlayLayout(on:screen)
   }
   @objc func displaysChanged() {

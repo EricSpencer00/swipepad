@@ -24,12 +24,14 @@ public struct GestureLexicon: Sendable {
     let observed=StrokeDecoder.resample(samples.map(\.point),count:16)
     guard !observed.isEmpty else {return []}
     let shape=StrokeDecoder.shape(observed)
-    let starts=Keyboard.keys.filter {$0.value.distance(first.point)<=0.24}.map(\.key)
+    // Wide start search: a finger can land several keys from the first letter.
+    let starts=Keyboard.keys.filter {$0.value.distance(first.point)<=0.5}.map(\.key)
     let ends=Keyboard.keys.filter {$0.value.distance(last.point)<=0.24}.map(\.key)
     var shortlist:[(String,Double)]=[]
     for start in starts {for end in ends {for entry in buckets[String(start)+String(end)] ?? [] {
-      let endpoint=(first.point.distance(entry.points[0])+last.point.distance(entry.points.last!))/2
-      let score=0.65*StrokeDecoder.meanDistance(observed,entry.points)+0.20*StrokeDecoder.meanDistance(shape,entry.shape)+0.15*endpoint
+      let endpoint=(0.4*first.point.distance(entry.points[0])+last.point.distance(entry.points.last!))/1.4
+      let aligned=StrokeDecoder.anchored(observed,to:entry.points[0])
+      let score=0.65*StrokeDecoder.meanDistance(aligned,entry.points)+0.20*StrokeDecoder.meanDistance(shape,entry.shape)+0.15*endpoint
       shortlist.append((entry.word,score))
     }}}
     shortlist.sort {$0.1 == $1.1 ? $0.0 < $1.0:$0.1 < $1.1}

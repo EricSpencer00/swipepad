@@ -114,6 +114,13 @@ public enum StrokeDecoder {
     guard area>0.00035,length>0.10,abs(winding)>4.5 else {return 0}
     return min(0.012,area*2)
   }
+  /// Lenient start: the stroke's start offset from `target` fades out linearly along the path,
+  /// so a finger that landed away from the first letter still matches; the end stays anchored.
+  public static func anchored(_ points:[Point],to target:Point)->[Point] {
+    guard let first=points.first,points.count>1 else {return points}
+    let dx=target.x-first.x,dy=target.y-first.y,last=Double(points.count-1)
+    return points.enumerated().map {i,p in let w=1-Double(i)/last;return Point(p.x+w*dx,p.y+w*dy)}
+  }
   public static func rank(_ samples:[StrokeSample],words:[String],limit:Int=5,matching:PathMatching = .proportional) -> [GestureCandidate] {
     guard samples.count>=3,limit>0,
       samples.allSatisfy({$0.source==samples[0].source && $0.sourcePoint.x.isFinite && $0.sourcePoint.y.isFinite && $0.time.isFinite && $0.point.x.isFinite && $0.point.y.isFinite && (0...1).contains($0.point.x) && (0...1).contains($0.point.y)}),
@@ -125,9 +132,10 @@ public enum StrokeDecoder {
       guard word.count>=2,word.lowercased().allSatisfy({Keyboard.keys[$0] != nil}) else {return nil}
       let ideal=resample(Keyboard.path(word))
       guard !ideal.isEmpty else {return nil}
-      let endpoint=(start.distance(ideal[0])+end.distance(ideal.last!))/2
-      // Soft endpoint penalty; no hard first-letter filter or angle snapping.
-      let location=matching == .proportional ? meanDistance(observed,ideal) : bandedDistance(observed,ideal)
+      // Soft endpoint penalty; the start is forgiven by anchoring, so it costs less than the end.
+      let endpoint=(0.4*start.distance(ideal[0])+end.distance(ideal.last!))/1.4
+      let aligned=anchored(observed,to:ideal[0])
+      let location=matching == .proportional ? meanDistance(aligned,ideal) : bandedDistance(aligned,ideal)
       let shapeScore=matching == .proportional ? meanDistance(normalized,shape(ideal)) : bandedDistance(normalized,shape(ideal))
       var score=0.65*location+0.20*shapeScore+0.15*endpoint
       let chars=Array(word.lowercased())

@@ -467,3 +467,72 @@ check(!FocusLookup.isUnpublished(application:FocusLookup.noValue,system:0),"fore
 check(FocusLookup.kind(application:0,system:nil,fieldFound:true)=="found","authoritative owned field classified found")
 check(FocusLookup.kind(application:FocusLookup.cannotComplete,system:nil,fieldFound:false)=="providerNotResponding","provider timeout classified separately")
 print("Passed \(count) core checks with authoritative focus classifications.")
+
+// MARK: Keyboard end-to-end: synthetic swipes through the same recognizer the app uses.
+func keyboardStroke(_ path: [Point], step: Double = 0.01) -> [StrokeSample] {
+  path.enumerated().map { StrokeSample($0.element, time: Double($0.offset) * step) }
+}
+func neighbour(of key: Character, dx: Double) -> Character? {
+  guard let p = Keyboard.keys[key] else { return nil }
+  let target = Point(p.x + dx, p.y)
+  return Keyboard.nearestKey(target).flatMap { $0 == key ? nil : $0 }
+}
+func jittered(_ path: [Point], amount: Double, seed: Double) -> [Point] {
+  path.enumerated().map { i, p in
+    Point(min(max(p.x + sin(Double(i + 1) * 12.9898 + seed) * amount, 0), 1),
+          min(max(p.y + cos(Double(i + 1) * 78.233 + seed) * amount, 0), 1))
+  }
+}
+let e2eWords = ["hello", "world", "keyboard", "swipe", "type", "quick", "brown", "fox", "jump",
+  "zebra", "trackpad", "gesture", "hover", "quiet", "bottom", "apple", "water", "green", "house",
+  "listen", "silent", "people", "thanks", "mouse", "pizza", "tower", "power", "vacuum"]
+let e2eLexicon = GestureLexicon(words: e2eWords, usePrior: false)
+func rankedWords(_ samples: [StrokeSample]) -> [String] { e2eLexicon.rank(samples, limit: 5).map(\.word) }
+
+// Full keyboard, exact swipes: every word is the top candidate.
+for word in e2eWords {
+  check(rankedWords(keyboardStroke(Keyboard.path(word))).first == word, "e2e exact swipe top-1 \(word)")
+}
+// Full keyboard, a wrong first letter (the finger started on a neighbouring key): the intended word stays in the top 3.
+var wrongStart = 0
+for word in e2eWords {
+  guard let first = word.first, let n = neighbour(of: first, dx: 0.1) ?? neighbour(of: first, dx: -0.1) else { continue }
+  let path = Keyboard.path(String(n) + word.dropFirst())
+  if Array(rankedWords(keyboardStroke(path)).prefix(3)).contains(word) { wrongStart += 1 }
+}
+check(wrongStart == e2eWords.count, "e2e neighbour-key start still finds the intended word (\(wrongStart)/\(e2eWords.count))")
+// Full keyboard, hand jitter of ~1 mm-scale wobble: still the top candidate.
+var jitterHits = 0
+for word in e2eWords {
+  if rankedWords(keyboardStroke(jittered(Keyboard.path(word), amount: 0.008, seed: 3))).first == word { jitterHits += 1 }
+}
+check(jitterHits >= e2eWords.count * 9 / 10, "e2e jittered swipes top-1 (\(jitterHits)/\(e2eWords.count))")
+
+// Viewport: crop, round-trip, and recognition through the crop.
+let crop = KeyboardViewport(minX: 0.25, minY: 0, maxX: 0.95, maxY: 1)
+check(KeyboardViewport(minX: 0.5, minY: 0.5, maxX: 0.51, maxY: 0.51).spanX >= KeyboardViewport.minimumSpan, "viewport enforces minimum span")
+check(KeyboardViewport(stored: [0.1, 0.2, 0.3]) == .full, "malformed stored viewport falls back to full keyboard")
+check(KeyboardViewport(stored: crop.stored) == crop, "viewport round-trips through storage")
+let k = Keyboard.keys["g"]!
+check(crop.toKeyboard(crop.toPad(k)).distance(k) < 1e-9, "viewport pad/keyboard round trip")
+check(crop.contains(k) && !crop.contains(Keyboard.keys["q"]!), "viewport shows only keys inside the crop")
+check(Keyboard.nearestKey(crop.toKeyboard(crop.toPad(Keyboard.keys["a"]!))) == "a", "tap inside crop maps to the right key")
+var cropHits = 0, cropWords = 0
+for word in e2eWords where word.allSatisfy({ crop.contains(Keyboard.keys[$0]!) }) {
+  cropWords += 1
+  let padPath = Keyboard.path(word).map(crop.toPad)
+  if rankedWords(crop.map(keyboardStroke(padPath))).first == word { cropHits += 1 }
+}
+check(cropWords > 0 && cropHits == cropWords, "e2e swipes inside a cropped keyboard (\(cropHits)/\(cropWords))")
+print("Passed \(count) checks including keyboard end-to-end swipes.")
+// Lenient start: the finger lands two, three or four keys from the first letter and the word still wins.
+for dx in [0.2, 0.3, 0.4] {
+  var hits = 0, total = 0
+  for word in e2eWords {
+    guard let first = word.first, let n = neighbour(of: first, dx: dx) ?? neighbour(of: first, dx: -dx) else { continue }
+    total += 1
+    if Array(rankedWords(keyboardStroke(Keyboard.path(String(n) + word.dropFirst()))).prefix(3)).contains(word) { hits += 1 }
+  }
+  check(total > 0 && hits == total, "e2e start \(dx) away still finds the intended word (\(hits)/\(total))")
+}
+print("Passed \(count) checks including lenient starts and keyboard crop.")

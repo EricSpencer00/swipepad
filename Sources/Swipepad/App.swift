@@ -441,6 +441,7 @@ final class GuidePanel: NSPanel {
     label.stringValue = "Ready · swipe and lift to type. Escape or double-Command turns typing off"
     target=nil;originalSelection=nil;originalContentDigest=nil
     keyboard.showKeys = UserDefaults.standard.bool(forKey: "showGuide")
+    keyboard.viewport = keyboardViewport
     keyboard.path = []
     keyboard.needsDisplay = true
     buttons.forEach { $0.isHidden = true }
@@ -646,11 +647,12 @@ final class GuidePanel: NSPanel {
     let completed=strokeSamples
     guard active,validTarget() else {cancel("Focus changed · stroke cancelled");return}
     guard strokeActualContact else {rejectCompletedStroke("No contact · swipe or tap again");return}
-    let singleLetter=Recognition.singleLetter(completed,freshContact:strokeFreshContact)
+    let mapped=keyboardViewport.map(completed) // strokes are matched in full-keyboard space
+    let singleLetter=Recognition.singleLetter(mapped,freshContact:strokeFreshContact)
     guard singleLetter != nil || (path.count>=3 && path.first.map {first in path.contains(where:{first.distance($0)>0.06})} == true) else {
       rejectCompletedStroke("Swipe longer words, or tap A/I");return
     }
-    let candidates=singleLetter.map {[$0]} ?? gestureLexicon.candidates(completed)
+    let candidates=singleLetter.map {[$0]} ?? gestureLexicon.candidates(mapped)
     captureDiagnostics.candidates=candidates.count
     guard let top=candidates.first else {
       rejectCompletedStroke("No matching word · swipe again");return
