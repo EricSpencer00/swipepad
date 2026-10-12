@@ -42,11 +42,21 @@ public struct CalibrationRect: Equatable, Sendable {
 public struct GestureCandidate: Sendable {
   public let word: String
   public let score: Double
+  public let geometryScore: Double
+  public init(word:String,score:Double,geometryScore:Double?=nil) {self.word=word;self.score=score;self.geometryScore=geometryScore ?? score}
 }
 /// Original inspectable full-path matcher. Location and normalized shape are scored separately.
 /// Geometry does not infer a repeated letter from a pause; localized loops are only a soft cue.
 public enum PathMatching: Sendable { case proportional, bandedDTW }
 public enum StrokeDecoder {
+  // Conservative prototype acceptance bound in normalized full-pad scoring units.
+  // Validated on synthetic paths only; no calibrated probability claim.
+  public static let maximumAcceptedScore = 0.06
+  public static let minimumCandidateMargin = 0.003
+  public static func accepts(_ ranked:[GestureCandidate])->Bool {
+    guard let first=ranked.first,first.geometryScore<maximumAcceptedScore else {return false}
+    return ranked.count<2 || ranked[1].score-first.score>=minimumCandidateMargin
+  }
   public static func resample(_ points: [Point], count: Int = 64) -> [Point] {
     guard count >= 2, let first=points.first, let last=points.last,
       points.allSatisfy({$0.x.isFinite && $0.y.isFinite}) else { return [] }
@@ -130,7 +140,7 @@ public enum StrokeDecoder {
   }
   public static func candidates(_ samples:[StrokeSample],words:[String]) -> [String] {
     let ranked=rank(samples,words:words)
-    guard let first=ranked.first,first.score < 0.24 else {return []}
+    guard accepts(ranked) else {return []}
     return ranked.map(\.word)
   }
 }

@@ -7,16 +7,18 @@ import Foundation
 import SwipepadCore
 import TrackpadBridge
 import Darwin
-let delegate = AppDelegate()
+let delegate = AppDelegate();delegate.liftGraceSeconds=0
+delegate.insertionTransport = .accessibility // This legacy fixture qualifies AX insertion.
 let app = NSApplication.shared
 app.delegate = delegate
-guard CommandLine.arguments.count == 2 else { print("Use scripts/test-integration.sh to create a fresh owned document."); exit(2) }
+guard CommandLine.arguments.count == 2 || (CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--contact-guards-only") else { print("Use scripts/test-integration.sh to create a fresh owned document."); exit(2) }
 let document = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 UserDefaults.standard.set(InputMode.trackpad.rawValue,forKey:"inputMode") // Only this separate harness's domain.
 var trial = 0
 var expected = ""
 @MainActor func stop(_ message: String, success: Bool = false) {
   print(message); fflush(stdout)
+  if let data=try? JSONEncoder().encode(delegate.captureDiagnostics),let counters=String(data:data,encoding:.utf8) {print("Final structural capture diagnostics: "+counters);fflush(stdout)}
   delegate.cancel("Fixture harness finished")
   app.stop(nil)
   exit(success ? 0 : 2)
@@ -40,7 +42,7 @@ var expected = ""
 }
 @MainActor func secondaryChecks() {
   guard let field = ownedField(), let baseline = delegate.attribute(field,kAXValueAttribute) as? String else {stop("ABORT: owned field unavailable for cancellation.");return}
-  delegate.toggle(); frame(nil)
+  if !delegate.active {delegate.toggle()}
   for point in Keyboard.path("test") {frame(point)}
   frame(nil)
   guard delegate.active && delegate.pending else {stop("FAIL: pending cancellation setup.");return}
@@ -83,15 +85,19 @@ var expected = ""
   let chosen = delegate.buttons[0].title
   delegate.buttons[0].performClick(nil)
   let replacement = "LEFT " + chosen + "  RIGHT"
-  guard !delegate.active, delegate.attribute(field,kAXValueAttribute) as? String == replacement else {stop("FAIL: UTF16 surrogate-pair selection replacement.");return}
-  print("PASS: legitimate nonempty UTF16 surrogate-pair selection replaced exactly via synthetic NSButton action.")
+  guard delegate.active,delegate.validTarget(),delegate.originalSelection?.location==5+(chosen+" ").utf16.count,delegate.originalSelection?.length==0,delegate.attribute(field,kAXValueAttribute) as? String == replacement else {stop("FAIL: UTF16 surrogate-pair selection replacement.");return}
+  print("PASS: legitimate nonempty UTF16 replacement with verified resulting caret rebasing.")
+  delegate.cancel("Fixture UTF16 replacement complete")
   for (name,location,length) in [("location-only",6,0),("length-only",5,1)] {
     guard setRange(field,5,0),fixturePending(),setRange(field,location,length) else {stop("ABORT: changed-range fixture setup.");return}
     let stale = delegate.buttons[0]
     stale.performClick(nil)
     guard !delegate.active, delegate.originalSelection == nil,
       delegate.attribute(field,kAXValueAttribute) as? String == replacement else {stop("FAIL: stale button action inserted after \(name) selection change.");return}
-    print("PASS: stale NSButton action after \(name) change rejected; zero write and captured range cleared.")
+    let reason=delegate.statusReason
+    delegate.updateModeIndicator()
+    guard let reason,delegate.status.menu?.items.first?.title.contains(reason)==true,delegate.feedbackPanel?.isVisible==true,delegate.feedbackPanel?.canBecomeKey==false else {stop("FAIL: cancellation feedback hidden or overwritten by status refresh.");return}
+    print("PASS: stale NSButton action after \(name) rejected with zero write; nonactivating visible reason survives status refresh.")
     guard fixturePending(), delegate.originalSelection?.location == location,
       delegate.originalSelection?.length == length else {stop("FAIL: reactivation did not capture fresh range.");return}
     delegate.retry()
@@ -131,17 +137,20 @@ var expected = ""
   guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else { stop("BLOCKED: separate harness lacks existing AX/event-posting access; no prompt requested."); return }
   guard let field = ownedField(), let value = delegate.attribute(field,kAXValueAttribute) as? String, value == expected else { stop("ABORT: owned foreground field or expected contents mismatch."); return }
   trial += 1
-  delegate.toggle()
+  if trial==1 {delegate.toggle()}
+  else {guard delegate.active,!delegate.pending,delegate.validTarget(),delegate.captureDiagnostics.trial==1 else {stop("FAIL: next word required another activation.");return}}
   guard delegate.active, delegate.validTarget() else { stop("FAIL: fixture activation did not preserve exact owned target."); return }
   if let listener = delegate.listener { OpenMTManager.shared().remove(listener); delegate.listener = nil }
-  frame(nil)
   for point in Keyboard.path(trial == 2 ? "world" : "hello") { frame(point) }
   frame(nil)
   guard delegate.pending else { stop("FAIL: synthetic gesture produced no pending candidates."); return }
+  guard delegate.captureDiagnostics.gateWaitFrames==0 else {stop("FAIL: first gesture still depends on an initial idle callback.");return}
+  print("PASS: initial down/move/lift decoded without any synthetic initial idle frame.")
   let index = trial == 2 ? 1 : 0
   let button = delegate.buttons[index]
   guard !button.isHidden else { stop("FAIL: selected candidate control missing."); return }
   let chosen = button.title
+  if trial==3 {frame(Point(0.4,0.5));guard delegate.contactGate.contactsPresent,delegate.pending else {stop("FAIL: held-contact candidate tracking.");return}}
   var range = CFRange()
   guard let rangeValue = delegate.attribute(field,kAXSelectedTextRangeAttribute), CFGetTypeID(rangeValue) == AXValueGetTypeID(), AXValueGetValue(unsafeDowncast(rangeValue,to:AXValue.self),.cfRange,&range), range.location >= 0, range.location + range.length <= (value as NSString).length else {stop("ABORT: owned selection range unavailable.");return}
   let expectedReceipt = (value as NSString).replacingCharacters(in:NSRange(location:range.location,length:range.length),with:chosen+" ")
@@ -169,7 +178,15 @@ var expected = ""
           guard let current = ownedField(), CFEqual(current,field), let result = delegate.attribute(current,kAXValueAttribute) as? String else { stop("FAIL: candidate click stole focus; not reading any other field."); return }
           print("State after click: active=\(delegate.active), pending=\(delegate.pending), focus=\(String(describing:delegate.lastFocusPreserved)), menu=\(delegate.status.menu?.items.first?.title ?? "none"), range=\(String(describing:delegate.selection(current))), original=\(String(describing:delegate.originalSelection))")
           print("Trial \(trial) receipt: \(String(reflecting:result)); expected: \(String(reflecting:expected)); AX accepted: \(delegate.lastInsertionSucceeded == true)"); fflush(stdout)
-          guard result == expected, !delegate.active, !delegate.panel.isVisible else { stop("FAIL: actual candidate click did not insert exactly once and end capture."); return }
+          guard result==expected,delegate.active,!delegate.pending,delegate.validTarget(),delegate.captureDiagnostics.insertions==trial else {stop("FAIL: actual candidate click did not insert exactly once and rebase safely.");return}
+          if trial==3 {
+            guard delegate.waitForLift else {stop("FAIL: held candidate-selection contact was rearmed too early.");return}
+            frame(Point(0.5,0.5));guard delegate.strokeSamples.isEmpty else {stop("FAIL: held contact started next word.");return}
+            physicalLift(Point(0.5,0.5));frame(Point(0.2,0.2))
+            guard delegate.strokeSamples.count==1,!delegate.waitForLift else {stop("FAIL: first fresh contact after lift swallowed.");return}
+            physicalLift(Point(0.2,0.2));guard !delegate.waitForLift else {stop("FAIL: too-short completed lift required idle callback.");return}
+            print("PASS: three words in one activation; held selection contact waits for actual lift; next first contact and too-short rearm work without fabricated idle.")
+          }
           if trial < 3 { beginTrial() } else { secondaryChecks() }
         }
       }
@@ -186,7 +203,7 @@ Timer.scheduledTimer(withTimeInterval:0.3,repeats:false) { _ in MainActor.assume
       Timer.scheduledTimer(withTimeInterval:0.2,repeats:false) { _ in MainActor.assumeIsolated {
         guard let field = ownedField(), let baseline = delegate.attribute(field,kAXValueAttribute) as? String else {stop("ABORT: owned activated field unavailable.");return}
         expected = baseline
-        beginTrial()
+        if CommandLine.arguments.contains("--contact-guards-only") {overlayContactGuards()} else {beginTrial()}
       }}
     }
   }

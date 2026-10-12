@@ -6,8 +6,42 @@ import CryptoKit
 import SwipepadCore
 import TrackpadBridge
 
+struct RuntimeHealth:Codable {
+  let kind:String,scope:String,runtimeIdentity:String
+  let signatureMatchesDisk:Bool,accessibilityTrusted:Bool,monitorInstalled:Bool
+  let keyboardPostAccess:Bool?
+  let menuBarVisible:Bool?
+  let accessoryApp:Bool?
+}
+
 @MainActor extension AppDelegate {
   static let bundleID = "com.ericspencer00.swipepad"
+  func checkRuntimeSignature()->Bool {
+    var code:SecCode?
+    guard SecCodeCopySelf([], &code)==errSecSuccess,let code else {return false}
+    return SecCodeCheckValidity(code,SecCSFlags(rawValue:kSecCSStrictValidate),nil)==errSecSuccess
+  }
+  func runtimeHealth(live:Bool)->RuntimeHealth {
+    RuntimeHealth(kind:"identityPermission",scope:live ? "Live GUI identity and trust; no field queries":"Diagnostic process identity and trust; not the GUI process",runtimeIdentity:captureRuntimeIdentity(),signatureMatchesDisk:runtimeSignatureValid,accessibilityTrusted:AXIsProcessTrusted(),monitorInstalled:globalMonitor != nil,keyboardPostAccess:canPostText,menuBarVisible:status?.isVisible==true,accessoryApp:NSApp?.activationPolicy() == .accessory)
+  }
+  func captureRuntimeIdentity()->String {
+    if let captureIdentityCache {return captureIdentityCache}
+    let executable=Bundle.main.executableURL
+    let hash=executable.flatMap {try? Data(contentsOf:$0)}.map {SHA256.hash(data:$0).map {String(format:"%02x",$0)}.joined()} ?? "unavailable"
+    let identity="Responder PID: \(ProcessInfo.processInfo.processIdentifier) · bundle: \(Bundle.main.bundleIdentifier ?? "unbundled")\nExecutable: \(executable?.path ?? "unavailable")\nSHA-256: \(hash)"
+    captureIdentityCache=identity;return identity
+  }
+  func outstandingWriteReports()->[OutstandingWriteReport] {
+    carriedWriteGuards + unresolvedWrites.map {write in
+      OutstandingWriteReport(pid:write.pid,bundleIdentifier:write.originalBundleIdentifier,expectedCaret:write.expectedCaret,transactionID:write.id.uuidString,mutationAccepted:write.mutationAccepted,caretAttemptPending:write.deferredCaret)
+    }
+  }
+  // Snapshot stored state only: no AX, signature validation, reconciliation or writes.
+  func captureStatusReport()->DoctorReport {
+    var report=DoctorReport(scope:"Live capture counters; stored state only, no AX queries or reconciliation.",state:active ? "On":"Off")
+    report.runtimeIdentity=captureRuntimeIdentity();report.capture=captureDiagnostics
+    report.outstandingWrites=outstandingWriteReports();return report
+  }
   func doctorReport(live: Bool, excludingPID: pid_t? = nil) -> DoctorReport {
     var input = DoctorInput()
     input.bundled = Bundle.main.bundleURL.pathExtension == "app"
@@ -19,7 +53,7 @@ import TrackpadBridge
       input.signatureValid =
         SecStaticCodeCheckValidity(
           code, SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate), nil)
-        == errSecSuccess
+        == errSecSuccess && (!live || runtimeSignatureValid)
       var information: CFDictionary?
       if SecCodeCopySigningInformation(
         code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
@@ -56,16 +90,20 @@ import TrackpadBridge
       let metadata = fieldMetadata(field)
       input.fieldRole = metadata.role
       input.fieldSubrole = metadata.subrole
-      input.selectedTextSettable = metadata.writable
+      input.targetedInsertionSettable = metadata.writable
       input.fieldSupported = supportedField(field)
     }
     var report = Doctor.evaluate(input)
+    report.capture=captureDiagnostics
+    // Stored structural transaction evidence only: no AXValue, digest, labels or reconciliation.
+    if live {report.outstandingWrites=outstandingWriteReports()}
     let executable = Bundle.main.executableURL
     let hash = executable.flatMap { try? Data(contentsOf: $0) }.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "unavailable"
     report.runtimeIdentity = "Input mode: \(inputMode.rawValue)\nResponder PID: \(ProcessInfo.processInfo.processIdentifier) · bundle: \(Bundle.main.bundleIdentifier ?? "unbundled")\nExecutable: \(executable?.path ?? "unavailable")\nSHA-256: \(hash)"
     return report
   }
   @objc func showSetup() {
+    guard !active else {return}
     cancel("Setup")
     if setupPanel == nil { buildSetupPanel() }
     refreshDoctor()
@@ -146,7 +184,9 @@ import TrackpadBridge
         self.handle(event)
       }
     } else if active {
-      cancel("Accessibility access is needed")
+      cancel("OFF")
+      captureDiagnostics.stage="permissionLost";captureDiagnostics.result="accessibilityRequired"
+      showFeedback("Accessibility access is needed · typing is off")
     }
     hotkey.cancel()
     updateModeIndicator()
@@ -154,15 +194,15 @@ import TrackpadBridge
   func updateModeIndicator() {
     guard let button = status?.button else { return }
     let state = active ? "On" : (!AXIsProcessTrusted() || globalMonitor == nil ? "Needs setup" : "Ready")
-    button.title = ""
+    button.title = "Swipepad"
     for item in status.menu?.items ?? [] where item.action == #selector(chooseMode(_:)) {
       item.isEnabled = !active
     }
     button.setAccessibilityLabel("Swipepad")
     button.setAccessibilityValue(state)
-    button.toolTip = "Swipepad: " + state
-    status.menu?.items.first?.title = "Swipepad: " + state
-    status.menu?.items.dropFirst().first?.title = active ? "Stop Swiping" : "Start Swiping"
+    button.toolTip = "Swipepad: " + (statusReason ?? state)
+    status.menu?.items.first?.title = "Swipepad: " + (statusReason ?? state)
+    status.menu?.items.dropFirst().first?.title = active ? "Stop Swiping ⌘⌘" : "Start Swiping ⌘⌘"
   }
 
   func installStatusIcon() {
@@ -272,7 +312,13 @@ import TrackpadBridge
       callerPID = caller.processIdentifier
     }
     let encoder = JSONEncoder()
-    guard let data = try? encoder.encode(doctorReport(live: true, excludingPID: callerPID)),
+    if notification.userInfo?["healthOnly"] as? Bool == true {
+      guard let data=try? encoder.encode(runtimeHealth(live:true)),let json=String(data:data,encoding:.utf8) else {return}
+      DistributedNotificationCenter.default().postNotificationName(Notification.Name("com.ericspencer00.swipepad.doctorResponse."+request),object:nil,userInfo:["json":json],deliverImmediately:true)
+      return
+    }
+    let report=notification.userInfo?["captureOnly"] as? Bool == true ? captureStatusReport():doctorReport(live:true,excludingPID:callerPID)
+    guard let data = try? encoder.encode(report),
       let json = String(data: data, encoding: .utf8)
     else { return }
     // Structural metadata/boolean stage evidence only. No file writes, text values,
@@ -281,7 +327,7 @@ import TrackpadBridge
       Notification.Name("com.ericspencer00.swipepad.doctorResponse." + request), object: nil,
       userInfo: ["json": json], deliverImmediately: true)
   }
-  func liveDoctorSnapshot() -> DoctorReport? {
+  func liveDoctorSnapshot(captureOnly:Bool=false) -> DoctorReport? {
     guard
       NSWorkspace.shared.runningApplications.contains(where: {
         $0.bundleIdentifier == Self.bundleID
@@ -302,17 +348,17 @@ import TrackpadBridge
     center.postNotificationName(
       Notification.Name("com.ericspencer00.swipepad.doctorRequest"), object: nil,
       userInfo: [
-        "request": request, "pid": NSNumber(value: ProcessInfo.processInfo.processIdentifier),
+        "request": request, "pid": NSNumber(value: ProcessInfo.processInfo.processIdentifier), "captureOnly":captureOnly,
       ], deliverImmediately: true)
     let deadline = Date().addingTimeInterval(3)
     var retryAt = Date().addingTimeInterval(0.2)
     while response.json == nil, Date() < deadline {
       RunLoop.current.run(until: Date().addingTimeInterval(0.02))
-      if response.json == nil && Date() >= retryAt {
+      if !captureOnly && response.json == nil && Date() >= retryAt {
         center.postNotificationName(
           Notification.Name("com.ericspencer00.swipepad.doctorRequest"), object: nil,
           userInfo: [
-            "request": request, "pid": NSNumber(value: ProcessInfo.processInfo.processIdentifier),
+            "request": request, "pid": NSNumber(value: ProcessInfo.processInfo.processIdentifier), "captureOnly":captureOnly,
           ], deliverImmediately: true)
         retryAt = Date().addingTimeInterval(0.2)
       }
@@ -322,3 +368,19 @@ import TrackpadBridge
   }
 }
 @MainActor private final class DoctorResponse { var json: String? }
+
+@MainActor extension AppDelegate {
+  func liveRuntimeHealth()->RuntimeHealth? {
+    let request=UUID().uuidString,response=DoctorResponse(),center=DistributedNotificationCenter.default()
+    let observer=center.addObserver(forName:Notification.Name("com.ericspencer00.swipepad.doctorResponse."+request),object:nil,queue:.main) {n in
+      let json=n.userInfo?["json"] as? String
+      MainActor.assumeIsolated {response.json=json}
+    }
+    defer {center.removeObserver(observer)}
+    center.postNotificationName(Notification.Name("com.ericspencer00.swipepad.doctorRequest"),object:nil,userInfo:["request":request,"pid":NSNumber(value:ProcessInfo.processInfo.processIdentifier),"captureOnly":true,"healthOnly":true],deliverImmediately:true)
+    let deadline=Date().addingTimeInterval(3)
+    while response.json==nil && Date()<deadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
+    guard let json=response.json,let data=json.data(using:.utf8),let report=try? JSONDecoder().decode(RuntimeHealth.self,from:data),report.kind=="identityPermission" else {return nil}
+    return report
+  }
+}

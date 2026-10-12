@@ -73,54 +73,54 @@ check(
 // Regression: observed Brave AXTextArea, subrole attributeUnsupported, selectedText writable.
 check(
   FieldPolicy.permits(
-    role: "AXTextArea", subrole: .absent, selectedTextSettable: true, secureInput: false),
+    role: "AXTextArea", subrole: .absent, insertionSettable: true, secureInput: false),
   "ordinary browser/TextEdit textarea without optional subrole")
 check(
   FieldPolicy.permits(
-    role: "AXTextArea", subrole: .named("AXUnknown"), selectedTextSettable: true, secureInput: false
+    role: "AXTextArea", subrole: .named("AXUnknown"), insertionSettable: true, secureInput: false
   ), "native text area with explicit ordinary subrole")
 check(
   FieldPolicy.permits(
-    role: "AXTextField", subrole: .named("AXUnknown"), selectedTextSettable: true,
+    role: "AXTextField", subrole: .named("AXUnknown"), insertionSettable: true,
     secureInput: false), "ordinary single-line text field")
 check(
   FieldPolicy.permits(
-    role: "AXTextField", subrole: .named("AXSearchField"), selectedTextSettable: true,
+    role: "AXTextField", subrole: .named("AXSearchField"), insertionSettable: true,
     secureInput: false), "ordinary search field")
 check(
   !FieldPolicy.permits(
-    role: "AXTextField", subrole: .named("AXSecureTextField"), selectedTextSettable: true,
+    role: "AXTextField", subrole: .named("AXSecureTextField"), insertionSettable: true,
     secureInput: false), "password subrole")
 check(
   !FieldPolicy.permits(
-    role: "AXTextArea", subrole: .named("AXSecureTextField"), selectedTextSettable: true,
+    role: "AXTextArea", subrole: .named("AXSecureTextField"), insertionSettable: true,
     secureInput: false), "secure metadata cannot bypass via text area role")
 check(
-  !FieldPolicy.permits(
-    role: "AXTextField", subrole: .absent, selectedTextSettable: true, secureInput: false),
-  "single-line missing safety metadata")
+  FieldPolicy.permits(
+    role: "AXTextField", subrole: .absent, insertionSettable: true, secureInput: false),
+  "ordinary single-line optional subrole absent")
 check(
   !FieldPolicy.permits(
-    role: "AXTextArea", subrole: .unreadable, selectedTextSettable: true, secureInput: false),
+    role: "AXTextArea", subrole: .unreadable, insertionSettable: true, secureInput: false),
   "AX metadata errors fail closed")
 check(
   !FieldPolicy.permits(
-    role: "AXTextArea", subrole: .absent, selectedTextSettable: false, secureInput: false),
+    role: "AXTextArea", subrole: .absent, insertionSettable: false, secureInput: false),
   "read-only text area")
 check(
   !FieldPolicy.permits(
-    role: "AXTextArea", subrole: .absent, selectedTextSettable: true, secureInput: true),
+    role: "AXTextArea", subrole: .absent, insertionSettable: true, secureInput: true),
   "Secure Input still blocks ordinary textarea")
 check(
   !FieldPolicy.permits(
-    role: "AXButton", subrole: .absent, selectedTextSettable: true, secureInput: false),
+    role: "AXButton", subrole: .absent, insertionSettable: true, secureInput: false),
   "unrelated control")
 check(
-  !FieldPolicy.permits(role: nil, subrole: .absent, selectedTextSettable: true, secureInput: false),
+  !FieldPolicy.permits(role: nil, subrole: .absent, insertionSettable: true, secureInput: false),
   "missing role")
 check(
   !FieldPolicy.permits(
-    role: "AXTextArea", subrole: .named("UnrecognizedSubrole"), selectedTextSettable: true,
+    role: "AXTextArea", subrole: .named("UnrecognizedSubrole"), insertionSettable: true,
     secureInput: false), "unknown subrole fail closed")
 var mock = DoctorInput()
 mock.bundled = true
@@ -135,7 +135,7 @@ mock.fieldFound = true
 mock.fieldSupported = true
 mock.fieldRole = "AXTextArea"
 mock.fieldSubrole = .absent
-mock.selectedTextSettable = true
+mock.targetedInsertionSettable = true
 check(
   Doctor.evaluate(mock).state == "Ready to test",
   "doctor ready preflight does not imply physical e2e")
@@ -318,3 +318,164 @@ for (label,matching) in [("proportional",PathMatching.proportional),("banded DTW
   print("Synthetic 11-word decoder benchmark \(label): \(String(format:"%.3f",Date().timeIntervalSince(start)*1000/30)) ms per rank; not hardware accuracy or production latency.")
 }
 print("Passed \(count) synthetic core checks. No physical touches or text insertion tested.")
+var diagnostic=CaptureDiagnostics();diagnostic.trial=1;diagnostic.states=["4":3];diagnostic.samples=8
+let encodedCapture=try! JSONEncoder().encode(diagnostic)
+check((try! JSONDecoder().decode(CaptureDiagnostics.self,from:encodedCapture)).samples==8,"structural per-trial capture counters roundtrip")
+check(!String(data:encodedCapture,encoding:.utf8)!.contains("\"point\"") && !String(data:encodedCapture,encoding:.utf8)!.contains("\"sourcePoint\""),"capture report omits gesture coordinates")
+print("Passed \(count) total checks including physical capture diagnostic policy.")
+
+for (point,key) in [(Point(0,1),Character("q")),(Point(1,1),Character("p")),(Point(0,0),Character("z")),(Point(1,0),Character("m"))] {
+  check(Keyboard.nearestKey(point)==key,"whole pad corner maps deterministically to \(key)")
+}
+for (key,point) in Keyboard.keys {check(Keyboard.nearestKey(point)==key,"canonical staggered center \(key)")}
+check(Keyboard.nearestKey(Point(-0.01,0.5))==nil,"outside pad rejected without clamp")
+let frozenRect=CalibrationRect(x:-900,y:30,width:1000,height:380)
+for point in [Point(0,0),Point(1,1),Point(0.05,0.8),Point(0.1,0.5),Point(0.2,0.2)] {
+  check(frozenRect.normalize(frozenRect.screenPoint(point))!.distance(point)<1e-12,"full pad forward/inverse geometry")
+}
+check(frozenRect.screenPoint(Point(0,0))==Point(-900,30) && frozenRect.screenPoint(Point(1,1))==Point(100,410),"independent axis scaling fills entire keyboard")
+print("Passed \(count) total checks; physical orientation and callback delivery remain hardware tests.")
+
+var gate=ContactGate()
+gate.rearm();check(!gate.waitingForLift,"cold rearm needs no idle callback")
+gate.observe(activeContacts:1);gate.rearm();check(gate.waitingForLift,"held contact must lift before rearm")
+gate.observe(activeContacts:0);gate.rearm();check(!gate.waitingForLift,"completed lift rearms immediately")
+gate.observe(activeContacts:2);gate.rearm();check(gate.waitingForLift,"multi-contact reset retains lift safety")
+gate.observe(activeContacts:0);gate.observe(activeContacts:1);check(!gate.waitingForLift,"first contact after actual lift is accepted")
+check(InsertionContinuation.permits(originalLocation:5,insertedUTF16Count:7,resultLocation:12,resultLength:0,sameTarget:true),"verified UTF16 replacement caret can rebase")
+check(!InsertionContinuation.permits(originalLocation:5,insertedUTF16Count:7,resultLocation:13,resultLength:0,sameTarget:true),"external moved caret cannot rebase")
+check(!InsertionContinuation.permits(originalLocation:5,insertedUTF16Count:7,resultLocation:12,resultLength:1,sameTarget:true),"nonempty resulting selection cannot rebase")
+check(!InsertionContinuation.permits(originalLocation:5,insertedUTF16Count:7,resultLocation:12,resultLength:0,sameTarget:false),"changed app/field cannot rebase")
+check(!InsertionContinuation.permits(originalLocation:Int.max,insertedUTF16Count:1,resultLocation:0,resultLength:0,sameTarget:true),"caret overflow rejected")
+let sharedTrace=Keyboard.path("hello")
+let guideSamples=sharedTrace.enumerated().map {StrokeSample($0.element,time:Double($0.offset),source:.trackpad)}
+let overlaySamples=sharedTrace.enumerated().map {StrokeSample($0.element,time:Double($0.offset),source:.screenOverlay)}
+check(Recognition.candidates(guideSamples,words:["hello","help","world"])==Recognition.candidates(overlaySamples,words:["hello","help","world"]),"guide presentation cannot change recognition")
+print("Passed \(count) core checks including held-contact rearm and verified insertion continuation.")
+
+let curveRaw=[Point(0,0),Point(0.3,0.8),Point(0.7,0.3),Point(1,1)]
+let curves=RenderCurve.segments(curveRaw)
+check(curves.first?.start==curveRaw.first && curves.last?.end==curveRaw.last,"render curve preserves endpoints")
+for c in curves {for i in 0...10 {let p=c.point(at:Double(i)/10);check(p.x >= min(c.start.x,c.control.x,c.end.x)-1e-12 && p.x <= max(c.start.x,c.control.x,c.end.x)+1e-12 && p.y >= min(c.start.y,c.control.y,c.end.y)-1e-12 && p.y <= max(c.start.y,c.control.y,c.end.y)+1e-12,"bounded interpolation without overshoot")}}
+let reversalRaw=[Point(0,0),Point(1,0),Point(0,0)]
+check(RenderCurve.segments(reversalRaw).contains(where:{$0.end==Point(1,0)}),"render reversal reaches exact turning point")
+let loopRaw=[Point(0.2,0.2),Point(0.8,0.2),Point(0.8,0.8),Point(0.2,0.8),Point(0.2,0.2)]
+check(RenderCurve.segments(loopRaw).first?.start==RenderCurve.segments(loopRaw).last?.end,"render loop remains closed")
+var ordering=FrameOrdering();ordering.reset(receivedAfter:10)
+check(!ordering.accept(receivedAt:9,timestamp:20,frame:1,deviceID:1),"queued previous session frame rejected")
+check(ordering.accept(receivedAt:11,timestamp:20,frame:2,deviceID:1),"fresh frame accepted")
+check(!ordering.accept(receivedAt:12,timestamp:20,frame:2,deviceID:1),"duplicate frame rejected")
+check(!ordering.accept(receivedAt:12,timestamp:19,frame:3,deviceID:1),"out of order timestamp rejected")
+check(!ordering.accept(receivedAt:12,timestamp:21,frame:3,deviceID:2),"different device frame rejected")
+print("Passed \(count) total core checks including bounded render curves and frame ordering.")
+
+func letterPress(_ key:Character,duration:Double=0.35,offset:Point=Point(0,0))->[StrokeSample] {
+ let c=Keyboard.keys[key]!,p=Point(c.x+offset.x,c.y+offset.y)
+ return [StrokeSample(p,time:10,phase:.began,source:.trackpad),StrokeSample(p,time:10+duration,phase:.ended,source:.trackpad)]
+}
+
+for duration in [0.05,0.15,0.35,2.0] {
+ check(Recognition.singleLetter(letterPress("a",duration:duration),freshContact:true)=="a","fresh A tap/hold has no time gate")
+ check(Recognition.singleLetter(letterPress("i",duration:duration),freshContact:true)=="I","fresh I tap/hold capitalized without time gate")
+}
+check(Recognition.singleLetter(letterPress("a"),freshContact:false)==nil,"activation-held letter rejected")
+check(Recognition.singleLetter(letterPress("a",offset:Point(0.04,0)),freshContact:true)=="a","A tap near key boundary accepted")
+check(Recognition.singleLetter(letterPress("a",offset:Point(0.051,0)),freshContact:true)==nil,"tap across A/S boundary cannot guess a")
+check(Recognition.singleLetter(letterPress("z"),freshContact:true)==nil,"non-AI tap rejected")
+check(Recognition.singleLetter([],freshContact:true)==nil,"empty single letter rejected")
+var jitter=letterPress("a");jitter[1]=StrokeSample(Point(0.12,0.52),time:10.35,phase:.ended,source:.trackpad)
+check(Recognition.singleLetter(jitter,freshContact:true)=="a","same-key modest jitter accepted")
+let moving=[StrokeSample(Point(0.08,0.46),time:1,source:.trackpad),StrokeSample(Point(0.12,0.54),time:2,source:.trackpad)]
+check(Recognition.singleLetter(moving,freshContact:true)==nil,"meaningfully moving failed stroke cannot become a letter")
+var backwards=letterPress("a");backwards.reverse()
+check(Recognition.singleLetter(backwards,freshContact:true)==nil,"backward letter time rejected")
+check([Recognition.singleLetter(letterPress("a",duration:0.05),freshContact:true),Recognition.singleLetter(letterPress("a",duration:0.05),freshContact:true)]==["a","a"],"repeated quick letters independently recognized")
+var freshGate=ContactGate();check(!freshGate.observedLift,"cold activation has no invented lift")
+freshGate.observe(activeContacts:1);check(!freshGate.observedLift,"already held contact does not invent lift")
+freshGate.noteLift();check(freshGate.observedLift,"mixed terminal establishes fresh next contact")
+freshGate.reset();check(!freshGate.observedLift,"reactivation clears known lift")
+freshGate.observe(activeContacts:0);check(freshGate.observedLift,"real empty contact frame establishes freshness")
+print("Passed \(count) core checks including untimed single-letter taps and freshness.")
+
+check(Recognition.singleLetter(letterPress("i",duration:0.05,offset:Point(-0.04,0)),freshContact:true)=="I","quick I tap near key edge accepted")
+check(Recognition.singleLetter(letterPress("i",offset:Point(-0.051,0)),freshContact:true)==nil,"I/U boundary crossing rejected")
+let tooMuchMotion=(0..<10).map {i in StrokeSample(Point(i%2==0 ? 0.08:0.12,0.50),time:Double(i),source:.trackpad)}
+check(Recognition.singleLetter(tooMuchMotion,freshContact:true)==nil,"moving same-key failed loop cannot become letter fallback")
+print("Passed \(count) final core checks with A/I key edges and moving-loop rejection.")
+
+check(TextReplacement.replacing("abc",location:1,length:1,with:"I ")=="aI c","value fallback replaces selected span")
+check(TextReplacement.replacing("😀abc",location:2,length:0,with:"a ")=="😀a abc","value fallback uses UTF16 caret")
+check(TextReplacement.replacing("😀abc",location:0,length:2,with:"I ")=="I abc","value fallback replaces full surrogate pair")
+check(TextReplacement.replacing("😀abc",location:1,length:0,with:"x")==nil,"surrogate-interior caret rejected")
+check(TextReplacement.replacing("abc",location:4,length:0,with:"x")==nil,"out-of-range value fallback rejected")
+check(TextReplacement.replacing("abc",location:1,length:Int.max,with:"x")==nil,"overflowing selected span rejected")
+for value in ["e\u{301}","👩‍💻","🇺🇸","\r\n"] {
+  let split=value=="👩‍💻" || value=="🇺🇸" ? 2:1
+  check(TextReplacement.replacing(value,location:split,length:0,with:"x")==nil,"replacement refuses interior of extended grapheme")
+}
+let planned:[(String,Int,Int,String)]=[
+  ("Hello",5,0," world "),("Hello ",6,0,"world "),
+  ("Hello there",5,0," world"),("Hello there",6,0,"world "),
+  ("Hello.",5,0," world"),("Say ()",5,0,"world"),
+  ("Say \"\"",5,0,"world"),("Say “”,",5,0,"world"),
+  ("Say \"hello\"",11,0," world "),("¿",1,0,"world "),("¡",1,0,"world "),
+  ("foo/",4,0," world "),("@",1,0," world "),("\u{fffc}",1,0," world "),
+  ("Hello old friend",6,3,"world"),("Hello old friend",5,5," world "),
+  ("Hello\nnext",5,0," world"),("Hello\u{00a0}",6,0,"world ")]
+for (value,location,length,expected) in planned {
+  check((try? WordInsertion.plan(value,location:location,length:length,word:"world").get())?.text==expected,"word plan uses existing boundaries and preserves exterior")
+}
+check(WordInsertion.plan("Hello",location:2,length:0,word:"world") == .failure(.partialWord),"word plan refuses completion/split guess inside word")
+check(WordInsertion.plan("Hello",location:2,length:3,word:"world") == .failure(.partialWord),"word plan refuses selection edge inside word")
+check(WordInsertion.plan("don't",location:3,length:0,word:"world") == .failure(.partialWord),"apostrophe joining a word is not an insertion boundary")
+check(WordInsertion.plan("well-known",location:4,length:0,word:"world") == .failure(.partialWord),"hyphen joining a word is not an insertion boundary")
+check(WordInsertion.plan("",location:0,length:0,word:"") == .failure(.invalidWord),"empty insertion word refused")
+check(WordInsertion.plan("",location:0,length:0,word:"two words") == .failure(.invalidWord),"multiword token refused")
+check(WordInsertion.plan("abc",location:Int.max,length:1,word:"world") == .failure(.invalidRange),"overflowing word-plan location refused")
+check(try! WordInsertion.plan("50%",location:2,length:0,word:"world").get().text==" world","percent suffix uses closing-punctuation spacing policy")
+let display=DisplayBounds(x:0,y:0,width:1000,height:700)
+for point in [Point(0,0),Point(999,0),Point(0,699),Point(999,699)] {
+ let safe=CornerAvoidance.redirected(point,displays:[display]);check(safe != point,"active corner redirects pointer")
+ check(safe.x>=36 && safe.x<=964 && safe.y>=36 && safe.y<=664,"redirect stays inside same display")
+ check(CornerAvoidance.redirected(point,displays:[display],enabled:[])==point,"unconfigured corners unchanged")
+}
+check(CornerAvoidance.redirected(Point(0,350),displays:[display])==Point(0,350),"ordinary edge pointing unchanged")
+check(CornerAvoidance.redirected(Point(500,350),displays:[display])==Point(500,350),"ordinary interior pointing unchanged")
+let secondary=DisplayBounds(x:-800,y:-600,width:800,height:600)
+check(CornerAvoidance.redirected(Point(-800,-600),displays:[secondary])==Point(-764,-564),"negative display origin respected")
+check(CornerAvoidance.redirected(Point(999,699),displays:[display],enabled:[.topLeft])==Point(999,699),"only configured corner is filtered")
+print("Passed \(count) core checks including guarded value replacement and corner geometry.")
+
+let diagonal=[StrokeSample(Point(0.8,0.2),time:0),StrokeSample(Point(0.7,0.3),time:0.05),StrokeSample(Point(0.6,0.4),time:0.1,phase:.ended)]
+for mirrored in [false,true] {
+ let trace=diagonal.map {StrokeSample(mirrored ? Point(1-$0.point.x,1-$0.point.y):$0.point,time:$0.time,phase:$0.phase)}
+ let end=trace.last!.point,delta=mirrored ? 1.0:-1.0
+ let first=Point(end.x+delta*0.005,end.y-delta*0.005),next=Point(end.x+delta*0.015,end.y-delta*0.015)
+ check(LiftGrace.nearby(trace,point:first,elapsed:0.04,idChanged:true,bounces:0,missing:0,grace:0.22),"both handed diagonal bounces spatially eligible")
+ check(LiftGrace.directionContinues(trace,first:first,next:next)==true,"both handed bounce headings continue")
+ check(LiftGrace.directionContinues(trace,first:first,next:end)==false,"reverse-direction next word is not joined")
+ check(!LiftGrace.nearby(trace,point:first,elapsed:0.18,idChanged:false,bounces:0,missing:0,grace:0.22),"late recontact is new word")
+ check(!LiftGrace.nearby(trace,point:first,elapsed:0.04,idChanged:false,bounces:3,missing:0,grace:0.22),"repeated bounce count bounded")
+ check(!LiftGrace.nearby(trace,point:first,elapsed:0.04,idChanged:false,bounces:1,missing:0.28,grace:0.22),"cumulative missing-contact duration bounded")
+ check(!LiftGrace.nearby(trace,point:Point(0.05,0.9),elapsed:0.04,idChanged:false,bounces:0,missing:0,grace:0.22),"distant fresh contact is new word")
+}
+print("Passed \(count) core checks including mirrored bounded release grace.")
+
+check(FocusLookup.isUnpublished(application:FocusLookup.noValue,system:FocusLookup.noValue),"both focus roots report unpublished state")
+check(!FocusLookup.isUnpublished(application:FocusLookup.apiDisabled,system:FocusLookup.noValue),"disabled API is not delayed focus")
+check(!FocusLookup.isUnpublished(application:FocusLookup.noValue,system:0),"foreign successful system focus is not delayed target focus")
+check(FocusLookup.kind(application:0,system:nil,fieldFound:true)=="found","authoritative owned field classified found")
+check(FocusLookup.kind(application:FocusLookup.cannotComplete,system:nil,fieldFound:false)=="providerNotResponding","provider timeout classified separately")
+print("Passed \(count) core checks with authoritative focus classifications.")
+
+let ownedSpace=WordReceipts.values(before:"cat\u{00a0}",location:4,length:0,inserted:"world ",previousOwnSeparator:true)!
+check(Set(ownedSpace.all)==Set(["cat\u{00a0}world ","cat\u{00a0}world\u{00a0}","cat world ","cat world\u{00a0}"]),"exact four receipts for own adjacent separator and fresh separator")
+let userSpace=WordReceipts.values(before:"cat\u{00a0}",location:4,length:0,inserted:"world ",previousOwnSeparator:false)!
+check(!userSpace.all.contains("cat world\u{00a0}") && userSpace.precedingSpace==nil,"user-entered NBSP cannot be silently normalized")
+let olderSpaces=WordReceipts.values(before:"one\u{00a0}cat\u{00a0}",location:8,length:0,inserted:"world ",previousOwnSeparator:true)!
+check(olderSpaces.combined=="one\u{00a0}cat world\u{00a0}" && !olderSpaces.all.contains("one cat world\u{00a0}"),"older NBSP outside adjacent owned boundary remains protected")
+check(WordReceipts.values(before:"cat\u{00a0}old",location:4,length:3,inserted:"world ",previousOwnSeparator:true)!.precedingSpace==nil,"selected replacement does not authorize preceding-space changes")
+check(WordReceipts.values(before:"cat ",location:4,length:0,inserted:"world ",previousOwnSeparator:true)!.precedingSpace==nil,"ordinary previous space is not normalized into NBSP")
+check(WordReceipts.values(before:"😀cat\u{00a0}",location:6,length:0,inserted:"world ",previousOwnSeparator:true)!.combined=="😀cat world\u{00a0}","separator receipts use exact UTF16 offsets after surrogate pair")
+check(WordReceipts.values(before:"cat",location:4,length:0,inserted:"world ",previousOwnSeparator:true)==nil,"invalid range cannot fabricate any receipt")
+print("Passed \(count) core checks including owned separator reflow.")
