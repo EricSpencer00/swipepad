@@ -1048,6 +1048,7 @@ final class GuidePanel: NSPanel {
       lastOwnedWord=nil;captureDiagnostics.correctionResult="postwriteUnconfirmed"
       cancel("Correction stopped · check receiving field");return
     }
+    if transaction.deferredCaret {_=settleDeferredCaret(writeID)}
     if confirmCorrection(owned,transaction:transaction) {return}
     guard ProcessInfo.processInfo.systemUptime<deadline else {
       lastOwnedWord=nil;captureDiagnostics.correctionResult="postwriteUnconfirmed"

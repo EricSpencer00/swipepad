@@ -754,3 +754,10 @@ check(placeholder.value=="cat world auto " && placeholder.captureDiagnostics.ins
 check(placeholder.captureDiagnostics.textEvidenceSource=="fullRange" && placeholder.postedTextPIDs==[40001,40001,40001],"full authoritative range resolves placeholder discrepancy across repeat keyboard delivery")
 placeholder.cancel("OFF")
 print("PASS contradictory accessible-value evidence; total \(checks)")
+
+let delayedAXCorrection=MemoryInput();delayedAXCorrection.selectedTextWritable=false;delayedAXCorrection.activate();word(delayedAXCorrection,"world");let delayedAXOwned=delayedAXCorrection.lastOwnedWord!;delayedAXCorrection.cancel("OFF")
+delayedAXCorrection.lastOwnedWord=AppDelegate.OwnedWord(field:delayedAXOwned.field,pid:delayedAXOwned.pid,range:delayedAXOwned.range,alternatives:["world","cat"],fingerprint:delayedAXOwned.fingerprint)
+delayedAXCorrection.delayedValuePublication=true;delayedAXCorrection.selectCandidate(NSButton(title:"cat",target:nil,action:nil))
+RunLoop.current.run(until:Date().addingTimeInterval(0.06))
+check(delayedAXCorrection.value=="cat " && delayedAXCorrection.caret.location==4 && delayedAXCorrection.caret.length==0 && delayedAXCorrection.unresolvedWrites.isEmpty && delayedAXCorrection.captureDiagnostics.correctionResult=="confirmed","delayed value-only correction settles its caret once after exact content without another text write")
+print("PASS deferred AX correction receipt; total \(checks)")
