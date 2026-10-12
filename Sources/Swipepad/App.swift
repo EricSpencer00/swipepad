@@ -84,6 +84,8 @@ final class GuidePanel: NSPanel {
   var captureDiagnostics=CaptureDiagnostics()
   var captureIdentityCache:String?
   var focusLookupErrors:(application:Int?,system:Int?)=(nil,nil)
+  // OS-backed in production; sandbox ports control this flag without changing the OS.
+  var secureInputActive:Bool {IsSecureEventInputEnabled()}
   let words = WordVocabulary.words
   lazy var gestureLexicon = GestureLexicon(words:words)
   func validateMenuItem(_ menuItem:NSMenuItem) -> Bool {
@@ -203,7 +205,7 @@ final class GuidePanel: NSPanel {
   func handle(_ e: NSEvent) {
     if e.cgEvent?.getIntegerValueField(.eventSourceUserData) == Self.ownTextEventTag {return}
     if e.type == .keyDown {
-      hotkey.cancel()
+      hotkey.cancel();abandonActivation()
       if e.keyCode == 53 {if active {cancel("OFF")} else {lastOwnedWord=nil;cancel("Cancelled")}}
       else {lastOwnedWord=nil;if active {cancel("Keyboard input · next swipe uses the current field")} else {panel?.orderOut(nil)}}
       return
@@ -294,7 +296,7 @@ final class GuidePanel: NSPanel {
     let metadata = fieldMetadata(element)
     return FieldPolicy.permits(
       role: metadata.role, subrole: metadata.subrole, insertionSettable: metadata.writable,
-      secureInput: IsSecureEventInputEnabled())
+      secureInput: secureInputActive)
   }
   func selection(_ element: AXUIElement) -> CFRange? {
     guard let value = attribute(element, kAXSelectedTextRangeAttribute),
@@ -307,7 +309,7 @@ final class GuidePanel: NSPanel {
   func validTarget() -> Bool {
     guard !active || inputProtectionHealthy else {return false}
     if pending,let target,let range=selection(target) {return identity(target,pid:originalPID) && permitsPendingCapture(target,pid:originalPID,range:range)}
-    guard !IsSecureEventInputEnabled(), let target,
+    guard !secureInputActive, let target,
       let pid = currentApplicationPID,
       let current = focused(pid)
     else {
@@ -316,7 +318,7 @@ final class GuidePanel: NSPanel {
     }
     let permitted = FocusGuard.permits(
       originalPID: originalPID, currentPID: pid,
-      sameElement: CFEqual(target, current), secure: IsSecureEventInputEnabled(),
+      sameElement: CFEqual(target, current), secure: secureInputActive,
       editable: supportedField(current))
       && originalSelection.map { original in
         selection(current).map { $0.location == original.location && $0.length == original.length } ?? false
@@ -329,7 +331,7 @@ final class GuidePanel: NSPanel {
     return permitted
   }
   func protectionContextReason()->String? {
-    if IsSecureEventInputEnabled() {return "secureInput"}
+    if secureInputActive {return "secureInput"}
     guard let pid=currentApplicationPID,let field=focused(pid) else {return nil}
     switch fieldMetadata(field).subrole {
     case .named("AXSecureTextField"):return "secureField"
@@ -346,7 +348,9 @@ final class GuidePanel: NSPanel {
     showFeedback(reason=="protectionMetadataUnavailable" ? "Protection metadata unavailable · swiping stopped":"Password or Secure Input · swiping stopped")
   }
   @objc func toggle() {
-    sessionGeneration += 1
+    let wasWaiting = !active && captureDiagnostics.stage=="awaitingFocusPublication"
+    abandonActivation();sessionGeneration += 1
+    if wasWaiting {return}
     if active {
       cancel("OFF")
       return
@@ -366,12 +370,47 @@ final class GuidePanel: NSPanel {
     }
     // Refuse before installing capture or suppressing pointer input. A non-text
     // double-Command must leave ordinary input usable without a dismissal click.
+    requestActivation()
+  }
+  static let focusPublicationRetryInterval=0.1
+  static let focusPublicationWaitSeconds=1.5
+  var activationRetryToken=0
+  func abandonActivation() {
+    activationRetryToken += 1
+    guard !active,captureDiagnostics.stage=="awaitingFocusPublication" else {return}
+    target=nil;originalSelection=nil;originalContentDigest=nil
+    captureDiagnostics.stage="activationAbandoned";statusReason=nil
+    updateModeIndicator()
+  }
+  // Capture stays Off until authoritative focus passes the unchanged admission guards.
+  func requestActivation(deadline:Double?=nil) {
+    let pid=currentApplicationPID,token=activationRetryToken
+    let limit=deadline ?? ProcessInfo.processInfo.systemUptime+Self.focusPublicationWaitSeconds
     guard acquireTarget() else {
       target=nil;originalSelection=nil;originalContentDigest=nil
+      if let pid,FocusLookup.isUnpublished(application:captureDiagnostics.applicationFocusAXError,system:captureDiagnostics.systemFocusAXError),
+        ProcessInfo.processInfo.systemUptime+Self.focusPublicationRetryInterval<=limit {
+        captureDiagnostics.stage="awaitingFocusPublication"
+        DispatchQueue.main.asyncAfter(deadline:.now()+Self.focusPublicationRetryInterval) {[weak self] in
+          guard let self,self.activationRetryToken==token else {return}
+          guard !self.active,self.currentApplicationPID==pid else {self.abandonActivation();return}
+          self.captureDiagnostics.focusPublicationRetries=(self.captureDiagnostics.focusPublicationRetries ?? 0)+1
+          self.requestActivation(deadline:limit)
+        }
+        return
+      }
       updateModeIndicator()
-      showActivationRefusal(statusReason ?? "Swipepad stayed off · focused input unavailable")
+      if NSApp != nil {showActivationRefusal(statusReason ?? "Swipepad stayed off · focused input unavailable")}
       return
     }
+    guard pid != nil,currentApplicationPID==pid else {
+      abandonActivation();target=nil;originalSelection=nil;originalContentDigest=nil
+      captureDiagnostics.stage="activationAbandoned";return
+    }
+    finishActivation()
+  }
+  func finishActivation() {
+    statusReason=nil;feedbackPanel?.orderOut(nil)
     activationScreen=NSWorkspace.shared.frontmostApplication.flatMap {screenForTarget($0.processIdentifier)} ?? NSScreen.main
     active = true
     pending = false;pendingWriteID=nil;queuedWords=[];continuationAnchor=nil
@@ -430,9 +469,18 @@ final class GuidePanel: NSPanel {
     let candidateField=candidatePID.flatMap {$0 == ProcessInfo.processInfo.processIdentifier ? nil:focused($0)}
     captureDiagnostics.applicationFocusAXError=focusLookupErrors.application
     captureDiagnostics.systemFocusAXError=focusLookupErrors.system
+    captureDiagnostics.targetBundleIdentifier=candidatePID.flatMap {NSRunningApplication(processIdentifier:$0)?.bundleIdentifier}
+    captureDiagnostics.focusLookupKind=candidatePID==ProcessInfo.processInfo.processIdentifier ? "swipepadFrontmost":FocusLookup.kind(application:focusLookupErrors.application,system:focusLookupErrors.system,fieldFound:candidateField != nil)
     guard let pid=candidatePID,let field=candidateField else {
       captureDiagnostics.stage="activationRefused";recordTargetRefusal("missingFocusedField")
-      showFeedback(active ? "Focus unavailable · turn typing off to choose a field" : "Typing is off · focus an editable field, then double-Command");return false
+      let why:String
+      switch captureDiagnostics.focusLookupKind {
+      case "accessibilityDisabled":why="Accessibility is unavailable to Swipepad"
+      case "focusNotPublished":why="The app reported no focused text field · click inside the field, then double-Command"
+      case "providerNotResponding":why="The app did not answer Accessibility in time"
+      default:why="Typing is off · focus an editable field, then double-Command"
+      }
+      showFeedback(active ? "Focus unavailable · turn typing off to choose a field" : why);return false
     }
     let metadata=fieldMetadata(field)
     let selected=attributeWritable(field,kAXSelectedTextAttribute)
@@ -672,17 +720,17 @@ final class GuidePanel: NSPanel {
     prepareNextStroke();label.stringValue=message
   }
   func sameTargetIdentity() -> Bool {
-    guard !IsSecureEventInputEnabled(),let target,let pid=currentApplicationPID,
+    guard !secureInputActive,let target,let pid=currentApplicationPID,
       let current=focused(pid) else {return false}
-    return FocusGuard.permits(originalPID:originalPID,currentPID:pid,sameElement:CFEqual(target,current),secure:IsSecureEventInputEnabled(),editable:supportedField(current))
+    return FocusGuard.permits(originalPID:originalPID,currentPID:pid,sameElement:CFEqual(target,current),secure:secureInputActive,editable:supportedField(current))
   }
   func fingerprint(_ field:AXUIElement)->Data? {
     guard supportedField(field),let text=attribute(field,kAXValueAttribute) as? String else {return nil}
     return Data(SHA256.hash(data:Data(text.utf8))) // Memory only; neither field text nor digest is logged.
   }
   func identity(_ field:AXUIElement,pid:pid_t)->Bool {
-    guard (!active || inputProtectionHealthy),!IsSecureEventInputEnabled(),let currentPID=currentApplicationPID,let current=focused(currentPID) else {return false}
-    return FocusGuard.permits(originalPID:pid,currentPID:currentPID,sameElement:CFEqual(field,current),secure:IsSecureEventInputEnabled(),editable:supportedField(current))
+    guard (!active || inputProtectionHealthy),!secureInputActive,let currentPID=currentApplicationPID,let current=focused(currentPID) else {return false}
+    return FocusGuard.permits(originalPID:pid,currentPID:currentPID,sameElement:CFEqual(field,current),secure:secureInputActive,editable:supportedField(current))
   }
   func permitsPendingCapture(_ field:AXUIElement,pid:pid_t,range:CFRange)->Bool {
     guard let id=pendingWriteID,let write=unresolvedWrites.first(where:{$0.id==id}),write.pid==pid,CFEqual(write.field,field),let digest=fingerprint(field) else {return false}
@@ -971,6 +1019,7 @@ final class GuidePanel: NSPanel {
   }
 
   func cancel(_ reason: String) {
+    abandonActivation()
     deferredLift=nil;liftTimerGeneration += 1
     if active && reason != "OFF" && reason != "Quit" {
       let category:String
@@ -1028,7 +1077,7 @@ final class GuidePanel: NSPanel {
     return true
   }
   @objc func appChanged() {
-    lastOwnedWord=nil
+    abandonActivation();lastOwnedWord=nil
     if !active {panel?.orderOut(nil)}
     if active {
       lastFocusPreserved = false

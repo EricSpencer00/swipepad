@@ -38,9 +38,14 @@ final class MemoryInput:AppDelegate {
   var beforeTargetValidation:(()->Void)?
   var afterNextValueRead:(()->Void)?
   var valueSetterOverride:((String)->String)?
+  var focusErrors:(application:Int?,system:Int?)=(nil,nil)
+  var finishedActivations=0
+  var simulatedSecureInput=false
+  override var secureInputActive:Bool {simulatedSecureInput}
   override func validTarget()->Bool {beforeTargetValidation?();return super.validTarget()}
   override var currentApplicationPID:pid_t? {pid}
-  override func focused(_ pid:pid_t)->AXUIElement? {metadataReads += 1;return missingFocus ? nil:(chosenField ?? ownedField)}
+  override func focused(_ pid:pid_t)->AXUIElement? {metadataReads += 1;if missingFocus {focusLookupErrors=focusErrors;return nil};return chosenField ?? ownedField}
+  override func finishActivation() {finishedActivations += 1;activate()}
   override func attribute(_ field:AXUIElement,_ name:String)->CFTypeRef? {
     metadataReads += 1
     if name==kAXValueAttribute,let stale=staleValueOnce {staleValueOnce=nil;return stale as CFString}
@@ -74,7 +79,7 @@ final class MemoryInput:AppDelegate {
   }
 }
 var checks=0
-func check(_ value:Bool,_ label:String) {precondition(value,label);checks += 1;print("PASS: "+label)}
+func check(_ value:Bool,_ label:String) {precondition(value,label);checks += 1;print("PASS: "+label);fflush(stdout)}
 var time=ProcessInfo.processInfo.systemUptime,frameID:Int32=0
 func frame(_ owner:MemoryInput,_ contacts:[(Int32,Point,OpenMTState)]) {
   frameID += 1;time += 0.01
@@ -554,3 +559,48 @@ noOpBound.activate();let refusedBefore=noOpBound.value;word(noOpBound,"test",id:
 check(noOpBound.value==refusedBefore && noOpBound.captureDiagnostics.writeAttempts==1 && noOpBound.captureDiagnostics.lastTargetRefusal=="unresolvedPreviousWrite","reactivation still refuses pending evidence")
 noOpBound.cancel("OFF");thirdState.cancel("OFF")
 print("PASS concrete Claude bounded-wait fix; total \(checks)")
+
+check(FocusLookup.isUnpublished(application:-25212,system:-25212) && FocusLookup.isUnpublished(application:-25212,system:nil),"noValue identifies unpublished authoritative focus")
+check(!FocusLookup.isUnpublished(application:-25211,system:-25211) && !FocusLookup.isUnpublished(application:-25204,system:-25212) && !FocusLookup.isUnpublished(application:0,system:0),"permission timeout and foreign focus never retry")
+check(FocusLookup.kind(application:-25211,system:nil,fieldFound:false)=="accessibilityDisabled" && FocusLookup.kind(application:-25212,system:-25212,fieldFound:false)=="focusNotPublished" && FocusLookup.kind(application:-25204,system:-25204,fieldFound:false)=="providerNotResponding" && FocusLookup.kind(application:0,system:0,fieldFound:false)=="focusOutsideTargetProcess","diagnostics distinguish focus failure causes")
+let late=MemoryInput();late.missingFocus=true;late.focusErrors=(-25212,-25212);late.requestActivation()
+check(!late.active && late.finishedActivations==0 && late.listener==nil && late.captureDiagnostics.stage=="awaitingFocusPublication" && !late.cornerProtection.blocksPointerAction(.mouseMoved) && !late.cornerProtection.blocksPointerAction(.leftMouseDown),"focus wait has no capture pointer filtering or write")
+RunLoop.current.run(until:Date().addingTimeInterval(0.25));late.missingFocus=false
+RunLoop.current.run(until:Date().addingTimeInterval(0.25))
+check(late.active && late.finishedActivations==1 && late.captureDiagnostics.targetAdmissions==1 && (late.captureDiagnostics.focusPublicationRetries ?? 0)>=1,"later authoritative focus completes same activation once")
+check(late.attributeNamesSet.isEmpty && late.captureDiagnostics.writeAttempts==0,"deferred activation never writes")
+late.cancel("OFF")
+let never=MemoryInput();never.missingFocus=true;never.focusErrors=(-25212,-25212);never.requestActivation()
+RunLoop.current.run(until:Date().addingTimeInterval(AppDelegate.focusPublicationWaitSeconds+0.3))
+let neverRetries=never.captureDiagnostics.focusPublicationRetries ?? 0
+check(!never.active && never.finishedActivations==0 && never.captureDiagnostics.stage=="activationRefused","missing focus is refused after bound")
+check(neverRetries>0 && neverRetries<=Int(AppDelegate.focusPublicationWaitSeconds/AppDelegate.focusPublicationRetryInterval)+1,"publication retry count bounded")
+RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+check(never.captureDiagnostics.focusPublicationRetries==neverRetries,"no retry survives refusal")
+let moved=MemoryInput();moved.missingFocus=true;moved.focusErrors=(-25212,-25212);moved.requestActivation();moved.pid=40002;moved.missingFocus=false
+RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+check(!moved.active && moved.finishedActivations==0 && moved.captureDiagnostics.stage=="activationAbandoned","app switch abandons activation")
+let keyed=MemoryInput();keyed.missingFocus=true;keyed.focusErrors=(-25212,-25212);keyed.requestActivation();keyed.handle(escape);keyed.missingFocus=false
+RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+check(!keyed.active && keyed.finishedActivations==0 && keyed.captureDiagnostics.stage=="activationAbandoned","Escape abandons activation")
+let toggled=MemoryInput();toggled.missingFocus=true;toggled.focusErrors=(-25212,-25212);toggled.requestActivation();toggled.toggle();toggled.missingFocus=false
+RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+check(!toggled.active && toggled.finishedActivations==0 && toggled.captureDiagnostics.stage=="activationAbandoned","second toggle exits wait instead of restarting")
+let denied=MemoryInput();denied.missingFocus=true;denied.focusErrors=(-25211,-25211);denied.requestActivation()
+RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+check(!denied.active && denied.captureDiagnostics.focusLookupKind=="accessibilityDisabled" && (denied.captureDiagnostics.focusPublicationRetries ?? 0)==0,"permission failure refuses immediately")
+let group=MemoryInput();group.role="AXGroup";group.requestActivation()
+check(!group.active && group.captureDiagnostics.lastTargetRefusal=="unsupportedField" && group.captureDiagnostics.focusLookupKind=="found" && (group.captureDiagnostics.focusPublicationRetries ?? 0)==0,"unsupported control stays distinct from unpublished focus")
+let raceActivation=MemoryInput();raceActivation.afterNextValueRead={raceActivation.pid=40002};raceActivation.requestActivation()
+check(!raceActivation.active && raceActivation.finishedActivations==0 && raceActivation.captureDiagnostics.stage=="activationAbandoned","app change during admission cannot finish activation")
+print("PASS simplified focus publication; total \(checks)")
+
+let plainKey=NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:10000,windowNumber:0,context:nil,characters:"a",charactersIgnoringModifiers:"a",isARepeat:false,keyCode:0)!
+let typedDuringWait=MemoryInput();typedDuringWait.missingFocus=true;typedDuringWait.focusErrors=(-25212,-25212);typedDuringWait.requestActivation();typedDuringWait.handle(plainKey);typedDuringWait.missingFocus=false
+RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+check(!typedDuringWait.active && typedDuringWait.finishedActivations==0 && typedDuringWait.captureDiagnostics.writeAttempts==0,"ordinary typing abandons deferred activation without interception")
+print("PASS all focus publication cancellation; total \(checks)")
+
+let nativeSecureModel=MemoryInput();nativeSecureModel.activate();nativeSecureModel.simulatedSecureInput=true;word(nativeSecureModel,"cat")
+check(!nativeSecureModel.active && nativeSecureModel.captureDiagnostics.writeAttempts==0 && nativeSecureModel.captureDiagnostics.lastTargetRefusal=="secureInput","sandbox Secure Input still stops capture with zero writes")
+print("PASS locked-host independent sandbox; total \(checks)")

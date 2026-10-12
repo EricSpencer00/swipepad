@@ -40,3 +40,19 @@ public enum Recognition {
     StrokeDecoder.candidates(samples,words:words)
   }
 }
+
+/// Classifies authoritative focus results without reading field text.
+public enum FocusLookup {
+  public static let apiDisabled = -25211, noValue = -25212, cannotComplete = -25204
+  public static func isUnpublished(application:Int?,system:Int?)->Bool {
+    application==noValue && (system==nil || system==noValue)
+  }
+  public static func kind(application:Int?,system:Int?,fieldFound:Bool)->String {
+    if fieldFound {return "found"}
+    if application==apiDisabled || system==apiDisabled {return "accessibilityDisabled"}
+    if isUnpublished(application:application,system:system) {return "focusNotPublished"}
+    if application==cannotComplete || system==cannotComplete {return "providerNotResponding"}
+    if application==0 || system==0 {return "focusOutsideTargetProcess"}
+    return "focusLookupFailed"
+  }
+}

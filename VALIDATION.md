@@ -1,5 +1,15 @@
 # Prototype validation
 
+## Focus-publication candidate — October 12
+
+Text-free installed v0.2.26 counters identified the activation refusal: both authoritative focus queries returned Apple's `kAXErrorNoValue` (-25212), with `missingFocusedField`, no input-capability inspection and zero writes. The recorded target PID was independently mapped to Codex using running-application bundle metadata; no Codex AX/UI automation occurred. The exact user phrase does not appear in source; the corresponding refusal messages describe missing focused input. This establishes the failing gate, not why Codex withheld focus.
+
+One actual Opus 5.5 request completed for source `1dd0c28`, recommending a short bounded publication retry. The candidate keeps capture Off until the unchanged field admission guards pass, cancels on keys/toggle/app switch, and binds activation to the same app before and after metadata reads. New structural diagnostics identify the target bundle, focus failure class and retry count. Local qualification: 317 core and 468 controlled-port handler checks. Secure Input remains OS-backed in production; the sandbox explicitly simulates that flag and verifies secure refusal rather than inheriting a locked CI desktop's state.
+
+The existing MacBook-origin mini-ts route was verified to the user's Apple mini, with Xcode 26.6 and Swift 6.3.3, an idle runner worker lane and bounded serial scratch admission. The registered runner is HorneSci-scoped and was not reused or reconfigured. Actual baseline `1dd0c28` built there and passed 312 core checks; its original handler fixture failed because the locked mini had real Secure Input active. That is recorded as a failed baseline, not a pass. The candidate's controlled-input fixture needs exact-head qualification on the mini. LaCie source checkout entered an uninterruptible storage wait; graceful cancellation was requested for only that owned clone, preserving its partial files, and small internal temporary scratch was used for the baseline. No forced termination, security change or new access registration occurred.
+
+The mini GUI remains locked. Receiving-field E2E, real finger input, installed guide/window/cursor stability and actual Codex insertion remain unverified. The owned WebKit fixture uses generated contacts with virtual capture startup; it still exercises actual focused-field AX insertion when its permitted GUI prerequisites are met, without requiring a trackpad on the mini. This is separate from Chromium/Electron/Codex and does not qualify installed hotkey/hardware startup. Scripts refuse locked GUI execution. No Codex computer-use or alternate AX watcher bypass is allowed.
+
 ## Sentence continuation candidate — source/headless qualification
 
 The separate v0.2.25 candidate plans word separators from existing text and the exact selection. It preserves existing punctuation/whitespace, replaces complete selected words, and rejects partial-word or split-grapheme insertion. The planning snapshot is checked again before mutation; same-caret content edits during a stroke are refused. Corrections preserve the original leading/trailing separator policy.

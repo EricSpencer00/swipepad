@@ -16,8 +16,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.ericspencer00.swipepad</string>
 <key>CFBundleName</key><string>Swipepad</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.26</string>
-<key>CFBundleVersion</key><string>29</string>
+<key>CFBundleShortVersionString</key><string>0.2.27</string>
+<key>CFBundleVersion</key><string>30</string>
 <key>CFBundleIconFile</key><string>Swipepad</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>

@@ -58,7 +58,7 @@ public struct DoctorReport: Codable, Sendable {
   }
   public var text: String {
     "Swipepad — \(state)\n\(scope)\n" + (runtimeIdentity.map { $0 + "\n" } ?? "") + "\n"
-      + (capture.map { "Capture trial \($0.trial) · mode \($0.mode) · stage \($0.stage)\nCoordinates: normalized physical trackpad\nCallbacks \($0.callbacks) · active frames \($0.contactFrames) · idle frames \($0.idleFrames) · samples \($0.samples) · candidates \($0.candidates) · accepted words \($0.insertions)\nWords: recognized \($0.recognizedWords) · write attempts \($0.writeAttempts) · mutations accepted \($0.acceptedMutations) · confirmed \($0.insertions) · pending \($0.pendingWords) · rejected \($0.rejectedWords) · backend \($0.lastInsertionBackend ?? "none") · AX error \($0.lastAXError.map(String.init) ?? "none")\nInput: \($0.inputCapabilities ?? "not inspected")\nLast target refusal \($0.lastTargetRefusal ?? "none")\nFocus rejection \($0.focusRejection ?? "none") · last result \($0.result ?? "none")\n\n" } ?? "")
+      + (capture.map { "Capture trial \($0.trial) · mode \($0.mode) · stage \($0.stage)\nCoordinates: normalized physical trackpad\nCallbacks \($0.callbacks) · active frames \($0.contactFrames) · idle frames \($0.idleFrames) · samples \($0.samples) · candidates \($0.candidates) · accepted words \($0.insertions)\nWords: recognized \($0.recognizedWords) · write attempts \($0.writeAttempts) · mutations accepted \($0.acceptedMutations) · confirmed \($0.insertions) · pending \($0.pendingWords) · rejected \($0.rejectedWords) · backend \($0.lastInsertionBackend ?? "none") · AX error \($0.lastAXError.map(String.init) ?? "none")\nInput: \($0.inputCapabilities ?? "not inspected") · target \($0.targetBundleIdentifier ?? "unknown") · focus \($0.focusLookupKind ?? "none") · retries \($0.focusPublicationRetries ?? 0)\nLast target refusal \($0.lastTargetRefusal ?? "none")\nFocus rejection \($0.focusRejection ?? "none") · last result \($0.result ?? "none")\n\n" } ?? "")
       + checks.map {
         "[\($0.status.rawValue.uppercased())] \($0.id): \($0.message)\nNext: \($0.repair)"
       }.joined(separator: "\n\n")
@@ -70,6 +70,9 @@ public struct CaptureDiagnostics: Codable, Sendable {
   public var targetAttempts=0
   public var targetAdmissions=0
   public var targetApplicationPID:Int32?
+  public var targetBundleIdentifier:String?
+  public var focusLookupKind:String?
+  public var focusPublicationRetries:Int?
   public var applicationFocusAXError:Int?
   public var systemFocusAXError:Int?
   public var confirmationIdentityMatches:Bool?

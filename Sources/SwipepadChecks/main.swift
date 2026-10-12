@@ -460,3 +460,10 @@ for mirrored in [false,true] {
  check(!LiftGrace.nearby(trace,point:Point(0.05,0.9),elapsed:0.04,idChanged:false,bounces:0,missing:0,grace:0.22),"distant fresh contact is new word")
 }
 print("Passed \(count) core checks including mirrored bounded release grace.")
+
+check(FocusLookup.isUnpublished(application:FocusLookup.noValue,system:FocusLookup.noValue),"both focus roots report unpublished state")
+check(!FocusLookup.isUnpublished(application:FocusLookup.apiDisabled,system:FocusLookup.noValue),"disabled API is not delayed focus")
+check(!FocusLookup.isUnpublished(application:FocusLookup.noValue,system:0),"foreign successful system focus is not delayed target focus")
+check(FocusLookup.kind(application:0,system:nil,fieldFound:true)=="found","authoritative owned field classified found")
+check(FocusLookup.kind(application:FocusLookup.cannotComplete,system:nil,fieldFound:false)=="providerNotResponding","provider timeout classified separately")
+print("Passed \(count) core checks with authoritative focus classifications.")

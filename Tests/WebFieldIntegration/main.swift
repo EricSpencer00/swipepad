@@ -3,6 +3,7 @@
 @preconcurrency import ApplicationServices
 @preconcurrency import WebKit
 import Foundation
+import CoreGraphics
 import Darwin
 import SwipepadCore
 import TrackpadBridge
@@ -58,13 +59,23 @@ if CommandLine.arguments.contains("--host") {
  host.start();app.run()
 }
 
-let owner=AppDelegate(),app=NSApplication.shared
+// Virtual contact source only in the owned fixture; production activation uses real hardware.
+final class WebFixtureInput:AppDelegate {
+ override func finishActivation() {
+  active=true;inputProtectionHealthy=true;strokeSource = .trackpad
+  pending=false;pendingWriteID=nil;queuedWords=[];continuationAnchor=nil
+  contactGate.reset();frameOrdering.reset(receivedAfter:0);finger=nil;strokeSamples=[];path=[]
+  captureDiagnostics.stage="ready"
+ }
+}
+let owner=WebFixtureInput(),app=NSApplication.shared
 owner.liftGraceSeconds=0;owner.insertionTransport = .accessibility
 app.delegate=owner
 UserDefaults.standard.set(true,forKey:"hasLaunched");UserDefaults.standard.set(false,forKey:"showGuide");UserDefaults.standard.set("trackpad",forKey:"inputMode")
 let hostProcess=Process(),toHost=Pipe(),fromHost=Pipe()
 var replies:[String]=[],frameNumber:Int32=0,syntheticTime=ProcessInfo.processInfo.systemUptime,failures=0
 func finish(_ message:String)->Never {
+ if let data=try? JSONEncoder().encode(owner.captureStatusReport()),let json=String(data:data,encoding:.utf8) {print("Stored fixture evidence: "+json)}
  owner.cancel("Quit");try? toHost.fileHandleForWriting.close()
  RunLoop.current.run(until:Date().addingTimeInterval(0.3));if hostProcess.isRunning {hostProcess.terminate()}
  print(message);print("Limits: WebKit owned page, generated contacts; no Chromium, Codex or hardware qualification.");fflush(stdout)
@@ -113,6 +124,8 @@ func runCase(_ c:Case) {
  }
  guard let target else {finish("BLOCKED: owned \(c.name) not exposed as focused field with seeded value/range")}
  owner.toggle()
+ let activationDeadline=Date().addingTimeInterval(AppDelegate.focusPublicationWaitSeconds+0.2)
+ while !owner.active && owner.captureDiagnostics.stage=="awaitingFocusPublication" && Date()<activationDeadline {RunLoop.current.run(until:Date().addingTimeInterval(0.02))}
  guard owner.active else {failures += 1;print("\(c.name): activation refused \(owner.captureDiagnostics.lastTargetRefusal ?? "none") · \(owner.captureDiagnostics.inputCapabilities ?? "none")");return}
  if let listener=owner.listener {OpenMTManager.shared().remove(listener);owner.listener=nil}
  for (i,w) in c.words.enumerated() {
@@ -129,7 +142,9 @@ func runCase(_ c:Case) {
  owner.cancel("OFF")
 }
 Timer.scheduledTimer(withTimeInterval:0.3,repeats:false) {_ in MainActor.assumeIsolated {
- guard AXIsProcessTrusted(),OpenMTManager.systemSupportsMultitouch(),let executable=Bundle.main.executableURL else {finish("BLOCKED: existing Accessibility trust and multitouch support required; nothing requested")}
+ let session=CGSessionCopyCurrentDictionary() as? [String:Any]
+ guard session?["CGSSessionScreenIsLocked"] as? Bool != true else {finish("BLOCKED: owned GUI fixture requires unlocked coordinated session; no window launched")}
+ guard AXIsProcessTrusted(),!owner.secureInputActive,let executable=Bundle.main.executableURL else {finish("BLOCKED: existing Accessibility trust and Secure Input off required; nothing requested")}
  fromHost.fileHandleForReading.readabilityHandler={handle in
   let lines=String(decoding:handle.availableData,as:UTF8.self).split(separator:"\n").map(String.init)
   DispatchQueue.main.async {MainActor.assumeIsolated {replies += lines}}
