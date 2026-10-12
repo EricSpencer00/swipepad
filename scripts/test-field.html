@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swipepad test field</title>
+<style>
+  body { font: 16px -apple-system, BlinkMacSystemFont, sans-serif; margin: 40px auto; max-width: 560px; padding: 0 20px; }
+  label { display: block; margin: 18px 0 6px; color: #555; font-size: 13px; }
+  input, textarea, [contenteditable] { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #bbb; border-radius: 6px; font: inherit; }
+  textarea { height: 90px; }
+  [contenteditable] { min-height: 60px; }
+</style>
+</head>
+<body>
+  <label for="plain">Single line</label>
+  <input id="plain" type="text" autocomplete="off">
+  <label for="multi">Multi line</label>
+  <textarea id="multi" autocomplete="off"></textarea>
+  <label for="rich">Editable area</label>
+  <div id="rich" contenteditable="true" spellcheck="false"></div>
+</body>
+</html>
