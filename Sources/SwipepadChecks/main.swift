@@ -594,6 +594,8 @@ let zigzag = (0..<12).map { Point(Double($0 % 2) * 0.9 + 0.05, Double($0) / 12) 
 _ = rankedWords(keyboardStroke(zigzag)) // must return without trapping on a scribble
 check(true, "customer: zig-zag scribble does not crash the recognizer")
 print("Passed \(count) checks including customer scenarios.")
+// Slow measurements (real lexicon, tuning split). Run with SWIPE_TUNE=1; they print but do not gate.
+if ProcessInfo.processInfo.environment["SWIPE_TUNE"] != nil {
 // Benchmark on the real lexicon (not the small test list): common words, realistic wobble and starts.
 let commonWords = ["the", "and", "that", "have", "for", "not", "with", "you", "this", "but", "from", "they",
   "say", "her", "she", "will", "one", "all", "would", "there", "their", "what", "about", "which", "when",
@@ -617,3 +619,30 @@ for word in commonWords {
   if fullLexicon.rank(keyboardStroke(wobbled), limit: 5).map(\.word).prefix(3).contains(word) { offTop3 += 1 }
 }
 print("Benchmark, real lexicon, start three keys off: top-3 \(offTop3)/\(offTotal).")
+// MARK: Tuning harness (experiment): train on half the words, report validation separately.
+let tuneWords = commonWords + ["because", "before", "great", "little", "right", "old", "same", "tell", "very", "still", "try", "learn", "change", "help", "live", "turn", "start", "might", "move", "again", "under", "never", "around", "during", "home", "night", "under", "water", "house", "world", "school", "family", "country", "student", "group", "problem", "system", "answer", "number", "music", "letter", "river", "pizza", "tower", "power", "vacuum", "mouse", "hover", "quiet", "green", "listen", "silent", "apple", "thanks", "bottom", "zebra", "quick", "brown", "jump", "fox", "gesture", "hello", "typing"]
+let tuneDedup = Array(Set(tuneWords)).sorted().filter { $0.count >= 3 && $0.allSatisfy { Keyboard.keys[$0] != nil } }
+let tuneTrain = tuneDedup.enumerated().filter { $0.offset % 2 == 0 }.map(\.element)
+let tuneVal = tuneDedup.enumerated().filter { $0.offset % 2 == 1 }.map(\.element)
+let tuneLexicon = GestureLexicon(words: WordVocabulary.words)
+func tuneScore(_ words: [String]) -> Double {
+  var hits = 0, total = 0
+  for word in words {
+    let path = Keyboard.path(word)
+    let scenarios: [[Point]] = [
+      jittered(path, amount: 0.01, seed: 5),
+      Array(path.enumerated().filter { $0.offset % 5 == 0 }.map(\.element)) + [path.last!],
+      { () -> [Point] in
+        guard let f = word.first, let n = neighbour(of: f, dx: 0.2) ?? neighbour(of: f, dx: -0.2) else { return path }
+        return jittered(Keyboard.path(String(n) + word.dropFirst()), amount: 0.01, seed: 9)
+      }(),
+    ]
+    for s in scenarios {
+      total += 1
+      if tuneLexicon.rank(keyboardStroke(s), limit: 5).map(\.word).prefix(3).contains(word) { hits += 1 }
+    }
+  }
+  return Double(hits) / Double(max(total, 1))
+}
+print(String(format: "TUNE train=%.4f val=%.4f words=%d/%d", tuneScore(tuneTrain), tuneScore(tuneVal), tuneTrain.count, tuneVal.count))
+}
