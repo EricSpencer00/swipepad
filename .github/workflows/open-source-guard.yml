@@ -3,7 +3,7 @@ name: Open source guard
 # Keeps the repository public and MIT-licensed. Fails loudly if either changes.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
   schedule:
     - cron: "17 6 * * 1"
