@@ -33,9 +33,18 @@ esac
 COUNTDOWN=${E2E_COUNTDOWN:-6}
 echo "Click into the $TARGET text field now. Starting in $COUNTDOWN seconds."
 sleep "$COUNTDOWN"
+focus_target() {
+  case "$TARGET" in
+    textedit) osascript -e 'tell application "TextEdit" to activate' ;;
+    claude) osascript -e 'tell application id "com.anthropic.claudefordesktop" to activate' ;;
+    web) osascript -e 'tell application "Brave Browser" to activate' 2>/dev/null || true ;;
+  esac
+  sleep 0.5
+}
 pass=0; fail=0
 for word in $WORDS; do
   # Launch through Launch Services so the app itself, not Terminal, is checked for Accessibility.
+  focus_target
   rm -f "$OUT/result.json" "$OUT/err.txt"
   open -g -W -n --stdout "$OUT/result.json" --stderr "$OUT/err.txt" "$APP" --args --self-test-write "$word" --delay 1 || true
   line=$(cat "$OUT/result.json" 2>/dev/null || echo '{"ok":false,"step":"launch","detail":"no result"}')
