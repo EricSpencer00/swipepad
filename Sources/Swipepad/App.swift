@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon
 import CryptoKit
+import SwiftUI
 import Foundation
 import SwipepadCore
 import TrackpadBridge
@@ -27,6 +28,8 @@ final class GuidePanel: NSPanel {
   var strokeCalibration:CalibrationRect?
   var strokeSamples:[StrokeSample]=[]
   var jumpFilter=ContactJumpFilter() // drops roll spikes before they reach the trail or recognition
+  var settingsWindow:NSWindow?
+  lazy var settingsModel=SettingsModel()
   var lastKeystroke:(word:String,alternatives:[String])? // last word typed by key presses, for Delete undo
   var shownChoices:[String]=[] // a close call: words offered on the top strip, typed only when tapped
   /// Pad area used as the keyboard (full trackpad unless the iPhone-sized area is chosen).
@@ -107,6 +110,9 @@ final class GuidePanel: NSPanel {
       "showGuide": true, "interval": 0.35, "debounce": 0.15, "inputMode": "trackpad", "overlayOpacity": 0.55,"liftGrace":LiftGrace.defaultSeconds,
     ])
     liftGraceSeconds=min(0.4,max(0,UserDefaults.standard.double(forKey:"liftGrace")))
+    NotificationCenter.default.addObserver(forName:.swipepadSettingsChanged,object:nil,queue:.main) {[weak self] _ in
+      MainActor.assumeIsolated {self?.liftGraceSeconds=min(0.4,max(0,UserDefaults.standard.double(forKey:"liftGrace")))}
+    }
     hotkey.interval = UserDefaults.standard.double(forKey: "interval")
     hotkey.debounce = UserDefaults.standard.double(forKey: "debounce")
     NSApp.setActivationPolicy(.accessory)
@@ -126,14 +132,7 @@ final class GuidePanel: NSPanel {
       item.representedObject=mode.rawValue;item.state=inputMode==mode ? .on : .off
     }
     menu.addItem(withTitle:"On-Screen Guide Layout…",action:#selector(showOverlayLayout),keyEquivalent:"")
-    let areaMenu=NSMenu()
-    let current=PadRegion.preset(for:padRegion)
-    for (title,key) in [("Full Trackpad","full"),("iPhone-Sized Area","iPhone"),("Compact Area","compact")] {
-      let item=areaMenu.addItem(withTitle:title,action:#selector(choosePadArea(_:)),keyEquivalent:"")
-      item.representedObject=key;item.state=current == key ? .on : .off
-    }
-    let areaItem=menu.addItem(withTitle:"Pad Area",action:nil,keyEquivalent:"")
-    areaItem.submenu=areaMenu
+    menu.addItem(withTitle:"Settings…",action:#selector(showSettings),keyEquivalent:",")
     menu.addItem(.separator())
     menu.addItem(withTitle: "Correct Last Word…", action: #selector(showLastCorrection), keyEquivalent: "")
     menu.addItem(withTitle: "Setup…", action: #selector(showSetup), keyEquivalent: "")
@@ -1079,10 +1078,15 @@ final class GuidePanel: NSPanel {
     // Ordinary refusals/cancellation never open a window or require dismissal.
     updateModeIndicator()
   }
-  @objc func choosePadArea(_ item:NSMenuItem) {
-    guard !active,let key=item.representedObject as? String,let region=PadRegion.named(key) else {return}
-    UserDefaults.standard.set(region.stored,forKey:"padRegion")
-    for candidate in item.menu?.items ?? [] {candidate.state=(candidate.representedObject as? String)==key ? .on : .off}
+  @objc func showSettings() {
+    if settingsWindow == nil {
+      let window=NSWindow(contentRect:NSRect(x:0,y:0,width:480,height:600),styleMask:[.titled,.closable],backing:.buffered,defer:false)
+      window.title="Settings";window.isReleasedWhenClosed=false
+      window.contentView=NSHostingView(rootView:PadSettingsView(model:settingsModel))
+      window.center()
+      settingsWindow=window
+    }
+    NSApp.activate(ignoringOtherApps:true);settingsWindow?.makeKeyAndOrderFront(nil)
   }
   @objc func showLastCorrection() {
     guard !active else {return}

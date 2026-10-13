@@ -784,3 +784,16 @@ do {
   check(compact.contains(Point(0.5, 0.5)) && !compact.contains(Point(0.02, 0.02)), "compact area is centred")
 }
 print("Passed \(count) checks including pad presets.")
+
+// MARK: Settings pad: resize from a corner handle, physical size, and the preset it matches.
+do {
+  let r = PadRegion(minX: 0.2, minY: 0.2, maxX: 0.8, maxY: 0.8)
+  let grown = r.dragging(.topRight, to: Point(0.95, 0.9))
+  check(abs(grown.maxX - 0.95) < 1e-9 && abs(grown.maxY - 0.9) < 1e-9 && abs(grown.minX - 0.2) < 1e-9, "dragging a corner moves its two edges only")
+  check(r.dragging(.bottomLeft, to: Point(0.7, 0.1)).minX <= r.maxX - PadRegion.minimumSpan + 1e-9, "a corner cannot cross the opposite edge")
+  check(r.dragging(.topLeft, to: Point(-1, 2)).minX == 0 && r.dragging(.topLeft, to: Point(-1, 2)).maxY == 1, "a corner stops at the trackpad edge")
+  let size = PadRegion.iPhoneSized.physicalSizeMM
+  check(abs(size.width - 71) < 2 && abs(size.height - 36) < 2, "iPhone-sized area is about 71 by 36 mm (\(size))")
+  check(PadRegion.full.matchingPreset == "full" && PadRegion.iPhoneSized.matchingPreset == "iPhone" && r.matchingPreset == nil, "a custom area reports no preset")
+}
+print("Passed \(count) checks including settings pad.")

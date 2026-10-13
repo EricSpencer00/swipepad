@@ -38,6 +38,27 @@ public struct PadRegion: Equatable, Sendable {
     guard let v = stored, v.count == 4, v.allSatisfy(\.isFinite), v[2] > v[0], v[3] > v[1] else { self = .full; return }
     self.init(minX: v[0], minY: v[1], maxX: v[2], maxY: v[3])
   }
+  /// Physical size of the trackpad these estimates are based on, in millimetres.
+  public static let trackpadMM = (width: 110.0, height: 75.0)
+  /// The area's size on a trackpad of `trackpadMM`. Estimates from published dimensions.
+  public var physicalSizeMM: (width: Double, height: Double) {
+    (spanX * Self.trackpadMM.width, spanY * Self.trackpadMM.height)
+  }
+  /// The preset whose area this matches, if any.
+  public var matchingPreset: String? {
+    ["full", "iPhone", "compact"].first { PadRegion.named($0) == self }
+  }
+  public enum Corner: Sendable { case topLeft, topRight, bottomLeft, bottomRight }
+  /// Dragging one corner moves its two edges. Edges stop at the trackpad and keep the minimum size.
+  public func dragging(_ corner: Corner, to p: Point) -> PadRegion {
+    let x = min(max(p.x, 0), 1), y = min(max(p.y, 0), 1)
+    switch corner {
+    case .topLeft: return PadRegion(minX: min(x, maxX - Self.minimumSpan), minY: minY, maxX: maxX, maxY: max(y, minY + Self.minimumSpan))
+    case .topRight: return PadRegion(minX: minX, minY: minY, maxX: max(x, minX + Self.minimumSpan), maxY: max(y, minY + Self.minimumSpan))
+    case .bottomLeft: return PadRegion(minX: min(x, maxX - Self.minimumSpan), minY: min(y, maxY - Self.minimumSpan), maxX: maxX, maxY: maxY)
+    case .bottomRight: return PadRegion(minX: minX, minY: min(y, maxY - Self.minimumSpan), maxX: max(x, minX + Self.minimumSpan), maxY: maxY)
+    }
+  }
   public var stored: [Double] { [minX, minY, maxX, maxY] }
   public var spanX: Double { maxX - minX }
   public var spanY: Double { maxY - minY }

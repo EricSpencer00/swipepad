@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Foundation
 import SwipepadCore
 
@@ -66,6 +67,16 @@ import SwipepadCore
   if let bitmap=choosing.bitmapImageRepForCachingDisplay(in:choosing.bounds) {
     choosing.cacheDisplay(in:choosing.bounds,to:bitmap)
     if let data=bitmap.representation(using:.png,properties:[:]) {try data.write(to:folder.appendingPathComponent("overlay-choices.png"))}
+  }
+  // Settings window, hosted offscreen like the other previews: trackpad area visual and typing timing.
+  let hosting=NSHostingView(rootView:PadSettingsView(model:SettingsModel()))
+  hosting.frame=NSRect(x:0,y:0,width:480,height:600)
+  let settingsWindow=NSWindow(contentRect:hosting.frame,styleMask:[],backing:.buffered,defer:false)
+  settingsWindow.appearance=NSAppearance(named:.aqua);settingsWindow.contentView=hosting
+  settingsWindow.displayIfNeeded();hosting.layoutSubtreeIfNeeded();hosting.display()
+  if let bitmap=hosting.bitmapImageRepForCachingDisplay(in:hosting.bounds) {
+    hosting.cacheDisplay(in:hosting.bounds,to:bitmap)
+    if let data=bitmap.representation(using:.png,properties:[:]) {try data.write(to:folder.appendingPathComponent("settings-pad.png"))}
   }
   try "Offscreen actual SetupView and OverlayKeyboardView renders. Permission states and hello stroke are illustrative fixtures. No window shown, permission requested, physical touch tested, or text inserted.\n".write(to: folder.appendingPathComponent("EVIDENCE.txt"), atomically: true, encoding: .utf8)
 }
