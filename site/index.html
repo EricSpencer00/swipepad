@@ -29,6 +29,10 @@ body{background:var(--black);color:var(--white);font-family:var(--mono);overflow
   font:500 15px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;transition:background .2s,color .2s}
 .cta:hover{background:var(--white);color:var(--black)}
 .cta:focus-visible{outline:2px solid var(--white);outline-offset:4px}
+.downloads{display:flex;flex-direction:column;gap:12px;align-items:center}
+.cta .mark{font-family:-apple-system,system-ui,sans-serif}
+.cta.soon{border-color:var(--hair);color:var(--dim);cursor:default;background:none}
+.cta.soon:hover{background:none;color:var(--dim)}
 .source{position:absolute;bottom:28px;left:0;right:0;font-size:13px;letter-spacing:.04em}
 .source a{color:var(--dim);text-decoration:none;transition:color .2s}
 .source a:hover{color:var(--white)}
@@ -41,7 +45,11 @@ body{background:var(--black);color:var(--white);font-family:var(--mono);overflow
 <div class="title" id="title" aria-hidden="true"><h1>SwipeType<span>.app</span></h1></div>
 
 <section class="content" id="content">
-  <a class="cta" href="https://github.com/EricSpencer00/swipepad/releases">Download</a>
+  <div class="downloads">
+    <a class="cta" href="https://github.com/EricSpencer00/swipepad/releases"><span class="mark" aria-hidden="true">&#xF8FF;</span> Download for macOS</a>
+    <span class="cta soon" aria-disabled="true">Windows · Coming soon</span>
+    <span class="cta soon" aria-disabled="true">Linux · Coming soon</span>
+  </div>
   <div class="source"><a href="tutorial.html">Tutorial</a> &nbsp;·&nbsp; <a href="https://github.com/EricSpencer00/swipepad">GitHub</a></div>
 </section>
 

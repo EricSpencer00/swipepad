@@ -37,7 +37,7 @@ pass=0; fail=0
 for word in $WORDS; do
   # Launch through Launch Services so the app itself, not Terminal, is checked for Accessibility.
   rm -f "$OUT/result.json" "$OUT/err.txt"
-  open -W -n --stdout "$OUT/result.json" --stderr "$OUT/err.txt" "$APP" --args --self-test-write "$word" --delay 1 || true
+  open -g -W -n --stdout "$OUT/result.json" --stderr "$OUT/err.txt" "$APP" --args --self-test-write "$word" --delay 1 || true
   line=$(cat "$OUT/result.json" 2>/dev/null || echo '{"ok":false,"step":"launch","detail":"no result"}')
   printf '%s\n' "$line"
   case "$line" in *'"ok":true'*) pass=$((pass+1)) ;; *) fail=$((fail+1)) ;; esac
