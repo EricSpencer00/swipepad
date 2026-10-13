@@ -144,3 +144,18 @@ public enum FieldPolicy {
     }
   }
 }
+
+/// Whether a field offers any insertion path. Providers disagree on which attributes they make
+/// settable, so writability is judged per path. An explicit `AXEditable=false` always refuses,
+/// even when another attribute looks writable.
+public enum InsertionCapability {
+  public static func available(
+    editable: Bool?, selectedTextWritable: Bool, valueAndRangeWritable: Bool,
+    keyboardPathAvailable: Bool
+  ) -> Bool {
+    if editable == false { return false }
+    if selectedTextWritable || valueAndRangeWritable { return true }
+    // The keyboard path needs the provider to say the field is editable; it is never inferred.
+    return keyboardPathAvailable && editable == true
+  }
+}

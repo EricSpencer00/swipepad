@@ -478,4 +478,59 @@ check(WordReceipts.values(before:"cat\u{00a0}old",location:4,length:3,inserted:"
 check(WordReceipts.values(before:"cat ",location:4,length:0,inserted:"world ",previousOwnSeparator:true)!.precedingSpace==nil,"ordinary previous space is not normalized into NBSP")
 check(WordReceipts.values(before:"😀cat\u{00a0}",location:6,length:0,inserted:"world ",previousOwnSeparator:true)!.combined=="😀cat world\u{00a0}","separator receipts use exact UTF16 offsets after surrogate pair")
 check(WordReceipts.values(before:"cat",location:4,length:0,inserted:"world ",previousOwnSeparator:true)==nil,"invalid range cannot fabricate any receipt")
-print("Passed \(count) core checks including owned separator reflow.")
+
+// Field text evidence. Each row is a provider shape the app can meet; a nil source means refused.
+let textRows:[(label:String,probe:FieldTextProbe,source:FieldText.Source?,ambiguous:Bool)] = [
+  ("native field: full range agrees with its count",
+    FieldTextProbe(value:"hello",characterCount:5,characterCountAfterRead:5,fullRangeText:"hello"),.fullRange,false),
+  ("surrogate pair is counted in UTF-16 units",
+    FieldTextProbe(value:"😀 old",characterCount:6,characterCountAfterRead:6,fullRangeText:"😀 old"),.fullRange,false),
+  ("empty field with zero count and empty range",
+    FieldTextProbe(value:"",characterCount:0,characterCountAfterRead:0,fullRangeText:""),.fullRange,false),
+  ("provider truncates the full range",
+    FieldTextProbe(value:"hello",characterCount:5,characterCountAfterRead:5,fullRangeText:"hel"),nil,false),
+  ("count changes while the range is read",
+    FieldTextProbe(value:"hello",characterCount:5,characterCountAfterRead:6,fullRangeText:"hello"),nil,false),
+  ("full range unsupported; AXValue agrees with count",
+    FieldTextProbe(value:"hello",characterCount:5,fullRangeError:AccessibilityErrorCode.attributeUnsupported),.value,false),
+  ("full range has no value; AXValue agrees with count",
+    FieldTextProbe(value:"hello",characterCount:5,fullRangeError:AccessibilityErrorCode.noValue),.value,false),
+  ("full range fails for an unexpected reason",
+    FieldTextProbe(value:"hello",characterCount:5,fullRangeError:AccessibilityErrorCode.cannotComplete),nil,false),
+  ("AXValue read is denied by the API",
+    FieldTextProbe(value:nil,valueError:AccessibilityErrorCode.apiDisabled,characterCount:5,characterCountAfterRead:5,fullRangeText:"hello"),nil,false),
+  ("AXValue omitted; full range authoritative (contenteditable shape)",
+    FieldTextProbe(value:nil,valueError:AccessibilityErrorCode.noValue,characterCount:5,characterCountAfterRead:5,fullRangeText:"hello"),.fullRange,false),
+  ("AXValue omitted and no count: nothing verifiable",
+    FieldTextProbe(value:nil,valueError:AccessibilityErrorCode.noValue),nil,false),
+  ("value-only provider with authored text",
+    FieldTextProbe(value:"Hi there",placeholder:"Search"),.value,false),
+  ("value-only provider reports its placeholder as the value",
+    FieldTextProbe(value:"Search",placeholder:"Search"),.value,true),
+  ("placeholder-equal value verified by a matching count",
+    FieldTextProbe(value:"Search",characterCount:6,fullRangeError:AccessibilityErrorCode.noValue,placeholder:"Search"),.value,false),
+  ("zero count never accepts a non-empty placeholder value",
+    FieldTextProbe(value:"Search",characterCount:0,fullRangeError:AccessibilityErrorCode.noValue,placeholder:"Search"),nil,false),
+  ("count disagrees with AXValue length",
+    FieldTextProbe(value:"hello",characterCount:3,fullRangeError:AccessibilityErrorCode.noValue),nil,false),
+  ("empty AXValue while the count reports text",
+    FieldTextProbe(value:"",characterCount:4,fullRangeError:AccessibilityErrorCode.noValue),nil,false),
+  ("AXValue error other than absence refuses even with agreeing count",
+    FieldTextProbe(value:"hello",valueError:AccessibilityErrorCode.cannotComplete,characterCount:5),nil,false),
+]
+for row in textRows {
+  let evidence=FieldText.resolve(row.probe)
+  check(evidence?.source == row.source && (evidence?.placeholderAmbiguous ?? false) == row.ambiguous, "field text: "+row.label)
+}
+check(AccessibilityErrorCode.noValue == -25212 && AccessibilityErrorCode.parameterizedAttributeUnsupported == -25213, "AX error codes match HIServices")
+check(FieldText.permitsValueRead(error: nil) && FieldText.permitsValueRead(error: AccessibilityErrorCode.noValue) && !FieldText.permitsValueRead(error: AccessibilityErrorCode.apiDisabled), "permission and provider failures are never read as absence")
+
+// Insertion capability: providers disagree on which attributes are settable, so each path is judged alone.
+check(!InsertionCapability.available(editable:false,selectedTextWritable:true,valueAndRangeWritable:true,keyboardPathAvailable:true), "explicit AXEditable=false refuses despite writable attributes")
+check(InsertionCapability.available(editable:nil,selectedTextWritable:true,valueAndRangeWritable:false,keyboardPathAvailable:false), "native field with writable selected text and no AXEditable")
+check(InsertionCapability.available(editable:nil,selectedTextWritable:false,valueAndRangeWritable:true,keyboardPathAvailable:false), "value-and-range provider without AXEditable")
+check(!InsertionCapability.available(editable:nil,selectedTextWritable:false,valueAndRangeWritable:false,keyboardPathAvailable:false), "value alone without a selection range is not an insertion path")
+check(!InsertionCapability.available(editable:nil,selectedTextWritable:false,valueAndRangeWritable:false,keyboardPathAvailable:true), "keyboard path never qualifies a field that lacks AXEditable=true")
+check(InsertionCapability.available(editable:true,selectedTextWritable:false,valueAndRangeWritable:false,keyboardPathAvailable:true), "explicitly editable field uses the keyboard path when no attribute is writable")
+check(!InsertionCapability.available(editable:true,selectedTextWritable:false,valueAndRangeWritable:false,keyboardPathAvailable:false), "explicitly editable field without any insertion path refuses")
+print("Passed \(count) core checks including owned separator reflow and field text evidence.")

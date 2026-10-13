@@ -388,35 +388,37 @@ final class GuidePanel: NSPanel {
     guard count>=0,count<=1_000_000,number.doubleValue==Double(count) else {return nil}
     return count
   }
-  // A provider may omit AXValue while exposing its full authoritative text suite.
-  // Never infer empty contents from a caret or accept a truncated/context-only range.
-  func fieldText(_ field:AXUIElement)->String? {
+  // Gathers the raw reads for one field; FieldText.resolve decides what they prove. Providers
+  // differ (AXValue omitted, placeholder reported as value, count or range refused), so every
+  // read stays here and every acceptance rule stays in SwipepadCore where checks can lock it in.
+  func textEvidence(_ field:AXUIElement)->FieldText.Evidence? {
     captureDiagnostics.textEvidenceSource=nil;captureDiagnostics.textEvidenceLength=nil;captureDiagnostics.rangeTextAXError=nil
     captureDiagnostics.textEvidenceValueLength=nil;captureDiagnostics.textEvidenceCharacterCount=nil;captureDiagnostics.textEvidenceValueMatchesRange=nil
     captureDiagnostics.textEvidenceMatchesPlaceholder=nil
     captureDiagnostics.valueReadAXError=nil;captureDiagnostics.valueReadKind=nil
     let direct=attribute(field,kAXValueAttribute) as? String
     captureDiagnostics.textEvidenceValueLength=direct?.utf16.count
-    if let error=captureDiagnostics.valueReadAXError,error != 0 && error != Int(AXError.noValue.rawValue) && error != Int(AXError.attributeUnsupported.rawValue) {return nil}
-    let count=characterCount(field)
-    captureDiagnostics.textEvidenceCharacterCount=count
-    let placeholder=(attribute(field,kAXPlaceholderValueAttribute as String) as? String).flatMap {$0.isEmpty ? nil:$0}
-    if let count {
-      // Prefer document text to a provider's accessible value/placeholder. The two
-      // can even have the same length, so length agreement alone is insufficient.
-      if let text=parameterizedText(field,range:CFRange(location:0,length:count)) {
-        guard text.utf16.count==count,characterCount(field)==count else {return nil}
-        captureDiagnostics.textEvidenceValueMatchesRange=direct.map {$0==text}
-        captureDiagnostics.textEvidenceMatchesPlaceholder=placeholder.map {$0==text}
-        captureDiagnostics.textEvidenceSource="fullRange";captureDiagnostics.textEvidenceLength=count;return text
-      }
-      let error=captureDiagnostics.rangeTextAXError
-      guard error==Int(AXError.noValue.rawValue) || error==Int(AXError.parameterizedAttributeUnsupported.rawValue) || error==Int(AXError.attributeUnsupported.rawValue) else {return nil}
+    // A permission or provider failure refuses here, before any count or text-suite read.
+    guard FieldText.permitsValueRead(error:captureDiagnostics.valueReadAXError) else {return nil}
+    var probe=FieldTextProbe(value:direct,valueError:captureDiagnostics.valueReadAXError)
+    probe.characterCount=characterCount(field)
+    probe.placeholder=(attribute(field,kAXPlaceholderValueAttribute as String) as? String).flatMap {$0.isEmpty ? nil:$0}
+    captureDiagnostics.textEvidenceCharacterCount=probe.characterCount
+    if let count=probe.characterCount {
+      // Prefer the provider's full range to its AXValue. The two can share a length, so
+      // length agreement alone is never enough; resolve() also re-checks the count.
+      probe.fullRangeText=parameterizedText(field,range:CFRange(location:0,length:count))
+      probe.fullRangeError=captureDiagnostics.rangeTextAXError
+      if probe.fullRangeText != nil {probe.characterCountAfterRead=characterCount(field)}
     }
-    guard let text=direct,count==nil || count==text.utf16.count else {return nil}
-    captureDiagnostics.textEvidenceMatchesPlaceholder=placeholder.map {$0==text}
-    captureDiagnostics.textEvidenceSource="value";captureDiagnostics.textEvidenceLength=text.utf16.count;return text
+    guard let evidence=FieldText.resolve(probe) else {return nil}
+    captureDiagnostics.textEvidenceMatchesPlaceholder=probe.placeholder.map {$0==evidence.text}
+    if evidence.source == .fullRange {captureDiagnostics.textEvidenceValueMatchesRange=direct.map {$0==evidence.text}}
+    captureDiagnostics.textEvidenceSource=evidence.source == .fullRange ? "fullRange":"value"
+    captureDiagnostics.textEvidenceLength=evidence.text.utf16.count
+    return evidence
   }
+  func fieldText(_ field:AXUIElement)->String? {textEvidence(field)?.text}
   var currentApplicationPID:pid_t? {NSWorkspace.shared.frontmostApplication?.processIdentifier}
   func attributeWritable(_ element:AXUIElement,_ name:String)->Bool {
     var writable:DarwinBoolean=false
@@ -467,9 +469,12 @@ final class GuidePanel: NSPanel {
     let rangeWritable=measureAX({AXUIElementIsAttributeSettable(element,kAXSelectedTextRangeAttribute as CFString,&rangeSettable)}) == .success && rangeSettable.boolValue
     // Metadata checks never read field contents. Admission checks the authoritative
     // content/caret only AFTER rejecting secure, read-only and unsupported fields.
-    let editable = attribute(element,"AXEditable") as? Bool
-    let keyboardWritable = insertionTransport == .keyboard && canPostText && editable == true
-    return (role, subrole, editable == false ? false:(writable || (valueWritable && rangeWritable) || keyboardWritable))
+    let insertable = InsertionCapability.available(
+      editable: attribute(element,"AXEditable") as? Bool,
+      selectedTextWritable: writable,
+      valueAndRangeWritable: valueWritable && rangeWritable,
+      keyboardPathAvailable: insertionTransport == .keyboard && canPostText)
+    return (role, subrole, insertable)
   }
   func supportedField(_ element: AXUIElement) -> Bool {
     let metadata = fieldMetadata(element)
@@ -689,7 +694,8 @@ final class GuidePanel: NSPanel {
     let subrole:String
     switch metadata.subrole {case .absent:subrole="absent";case .unreadable:subrole="unreadable";case .named(let name):subrole=["AXUnknown","AXSearchField","AXSecureTextField"].contains(name) ? name:"unrecognized"}
     captureDiagnostics.inputCapabilities="Role \(role) · subrole \(subrole) · selected-text write \(selected) · value write \(value) · selection write \(rangeWrite)"
-    guard supportedField(field) else {
+    // Admit from the same metadata snapshot the diagnostics just recorded, not a second read.
+    guard FieldPolicy.permits(role:metadata.role,subrole:metadata.subrole,insertionSettable:metadata.writable,secureInput:secureInputActive) else {
       captureDiagnostics.stage="activationRefused";recordTargetRefusal("unsupportedField")
       showFeedback("This field does not expose safe editable input · see Setup diagnostics");return false
     }
@@ -1002,8 +1008,8 @@ final class GuidePanel: NSPanel {
     guard runtimeSignatureValid else {stopForChangedBuild();return .cannotComplete}
     guard identity(field,pid:pid),let current=selection(field),current.location==range.location,current.length==range.length,
       permitsResolvedWrite(field,pid:pid,range:range) else {return .cannotComplete}
-    let before=fieldText(field)
-    guard let before=before,expectedBefore.map({$0==before}) ?? true,
+    let evidence=textEvidence(field)
+    guard let before=evidence?.text,expectedBefore.map({$0==before}) ?? true,
       let expected=TextReplacement.replacing(before,location:range.location,length:range.length,with:inserted) else {return .cannotComplete}
     let valueBackend=attributeWritable(field,kAXValueAttribute) && attributeWritable(field,kAXSelectedTextRangeAttribute)
     let directBackend=attributeWritable(field,kAXSelectedTextAttribute)
@@ -1012,6 +1018,9 @@ final class GuidePanel: NSPanel {
     // can bypass a controlled editor's input handling and write its accessible
     // representation back as document text. Choose once; never switch after mutation.
     let useValueBackend=valueBackend && !directBackend
+    // A whole-value rewrite publishes AXValue as document text. Refuse when that value is only a
+    // placeholder-equal hint that no character count verified (see FieldText.Evidence).
+    guard !(useValueBackend && !keyboardBackend && evidence?.placeholderAmbiguous == true) else {return .cannotComplete}
     guard (keyboardBackend ? canPostText : (valueBackend || directBackend)),identity(field,pid:pid),let checked=selection(field),checked.location==range.location,checked.length==range.length,
       fieldText(field)==before else {return .cannotComplete}
     // Allocate before recording a transaction; never retry AX after posting an event.

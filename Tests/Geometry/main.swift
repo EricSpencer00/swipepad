@@ -2,7 +2,11 @@ import AppKit
 import SwipepadCore
 import TrackpadBridge
 // Offscreen source-path checks: no application launch, listener, permission prompt or pointer event.
-let delegate=AppDelegate();delegate.liftGraceSeconds=0
+// Feedback notices are real windows; this headless suite records their reasons without showing any.
+final class WindowlessGeometry:AppDelegate {
+  override var feedbackWindowsEnabled:Bool {false}
+}
+let delegate=WindowlessGeometry();delegate.liftGraceSeconds=0
 var count=0
 func check(_ condition:Bool,_ message:String) {precondition(condition,message);count += 1}
 let points=[Point(0,0),Point(1,1),Point(0.05,0.8),Point(0.1,0.5),Point(0.2,0.2),Point(0.95,0.8)]
@@ -39,11 +43,11 @@ for mode in [InputMode.trackpad,.screenOverlay] {
   }
 }
 if let priorGuide {UserDefaults.standard.set(priorGuide,forKey:"showGuide")} else {UserDefaults.standard.removeObject(forKey:"showGuide")}
-check(delegate.keyboard is OverlayKeyboardView,"default guide uses same marker and key highlight renderer")
+check(KeyboardView.superclass()==OverlayKeyboardView.self,"default guide keyboard inherits the shared overlay renderer")
 print("Passed \(count) offscreen production checks, including whole-guide visibility and shared renderer. No UI shown or physical callbacks tested.")
 
 delegate.showFeedback("Focus an editable text area")
-check(delegate.feedbackPanel==nil,"missing-field feedback creates no popup")
+check(delegate.feedbackPanel==nil,"headless missing-field feedback records its reason without a popup")
 check(delegate.statusReason=="Focus an editable text area","refusal reason remains inspectable without dismissal")
 delegate.cancel("Application changed")
 check(!delegate.panel.isVisible && delegate.feedbackPanel==nil,"focus cancellation leaves no window to exit")

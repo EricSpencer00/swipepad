@@ -18,7 +18,7 @@ final class NativeInput:AppDelegate {
   override var feedbackWindowsEnabled:Bool {false}
   var owned:AXUIElement?
   var contentReads=0
-  override func fieldText(_ field:AXUIElement)->String? {contentReads += 1;return super.fieldText(field)}
+  override func textEvidence(_ field:AXUIElement)->FieldText.Evidence? {contentReads += 1;return super.textEvidence(field)}
   // A virtual application identity avoids admission's intentional self-app guard.
   // No event posting or application lookup/launch is performed for this identity.
   override var currentApplicationPID:pid_t? {Int32.max}
