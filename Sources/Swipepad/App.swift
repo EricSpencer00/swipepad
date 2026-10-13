@@ -28,6 +28,7 @@ final class GuidePanel: NSPanel {
   var strokeCalibration:CalibrationRect?
   var strokeSamples:[StrokeSample]=[]
   var jumpFilter=ContactJumpFilter() // drops roll spikes before they reach the trail or recognition
+  var exitHint=ExitHint()
   var settingsWindow:NSWindow?
   lazy var settingsModel=SettingsModel()
   var lastKeystroke:(word:String,alternatives:[String])? // last word typed by key presses, for Delete undo
@@ -91,7 +92,7 @@ final class GuidePanel: NSPanel {
   var statusReason:String?
   var feedbackPanel:GuidePanel?
   var feedbackGeneration=0
-  lazy var cornerProtection=HotCornerProtection(isActive:{[weak self] in self?.active == true},failed:{[weak self] in self?.pauseForInputProtectionFailure()},escapePressed:{[weak self] in self?.hotkey.cancel();self?.cancel("OFF")},observedScroll:{[weak self] in self?.captureDiagnostics.scrollEventsPassed += 1},deletePressed:{[weak self] in self?.undoLastKeystrokeWord() ?? false})
+  lazy var cornerProtection=HotCornerProtection(isActive:{[weak self] in self?.active == true},failed:{[weak self] in self?.pauseForInputProtectionFailure()},escapePressed:{[weak self] in self?.hotkey.cancel();self?.cancel("OFF")},observedScroll:{[weak self] in self?.captureDiagnostics.scrollEventsPassed += 1},deletePressed:{[weak self] in self?.undoLastKeystrokeWord() ?? false},noisePressed:{[weak self] in self?.exitNoise()})
   var captureDiagnostics=CaptureDiagnostics()
   var captureIdentityCache:String?
   var focusLookupErrors:(application:Int?,system:Int?)=(nil,nil)
@@ -657,7 +658,12 @@ final class GuidePanel: NSPanel {
     appendSample(contact.point,time:contact.time,phase:.moved,sourcePoint:contact.point)
     captureDiagnostics.stage="swiping";renderStroke();return true
   }
+  func exitNoise() {
+    guard active else {return}
+    if exitHint.record(at:ProcessInfo.processInfo.systemUptime) {showFeedback(ExitHint.message)}
+  }
   func finishStroke() {
+    exitHint.swiped()
     guard strokeToken>retiredToken else {return}
     retiredToken=strokeToken // One terminal/one write attempt, even on failure.
     let completed=strokeSamples
@@ -1183,8 +1189,9 @@ final class GuidePanel: NSPanel {
   private(set) var capturedButtons:Set<Int64>=[]
   private(set) var startFailureReason:String?
   let isActive:()->Bool,failed:()->Void,escapePressed:()->Void,observedScroll:()->Void
-  let deletePressed:()->Bool // true when Delete undid the last typed word, so the key is consumed
-  init(isActive:@escaping ()->Bool,failed:@escaping ()->Void,escapePressed:@escaping ()->Void,observedScroll:@escaping ()->Void = {},deletePressed:@escaping ()->Bool = {false}) {self.isActive=isActive;self.failed=failed;self.escapePressed=escapePressed;self.observedScroll=observedScroll;self.deletePressed=deletePressed}
+  let deletePressed:()->Bool
+  let noisePressed:()->Void // true when Delete undid the last typed word, so the key is consumed
+  init(isActive:@escaping ()->Bool,failed:@escaping ()->Void,escapePressed:@escaping ()->Void,observedScroll:@escaping ()->Void = {},deletePressed:@escaping ()->Bool = {false},noisePressed:@escaping ()->Void = {}) {self.isActive=isActive;self.failed=failed;self.escapePressed=escapePressed;self.observedScroll=observedScroll;self.deletePressed=deletePressed;self.noisePressed=noisePressed}
   func start()->Bool {
     // Never swallow the release of a drag/click that started in another app.
     guard capturedButtons.isEmpty,NSEvent.pressedMouseButtons==0 else {startFailureReason="Release the mouse button before starting swiping";return false}
@@ -1196,6 +1203,7 @@ final class GuidePanel: NSPanel {
       guard let info else {return Unmanaged.passUnretained(event)}
       let blocked = MainActor.assumeIsolated {
         let owner=Unmanaged<HotCornerProtection>.fromOpaque(info).takeUnretainedValue()
+        if owner.isActive() && owner.blocksPointerAction(type) {owner.noisePressed()}
         if type == .keyDown && event.getIntegerValueField(.eventSourceUserData) != AppDelegate.ownTextEventTag {
           return owner.handleCaptureKey(type,keyCode:event.getIntegerValueField(.keyboardEventKeycode))
         }
@@ -1213,8 +1221,8 @@ final class GuidePanel: NSPanel {
   }
   func handleCaptureKey(_ type:CGEventType,keyCode:Int64)->Bool {
     guard isActive(),type == .keyDown else {return false}
-    if keyCode == 51 {return deletePressed()} // Delete undoes the last word only; otherwise it passes through
-    guard keyCode == 53 else {return false}
+    if keyCode == 51 {return deletePressed()}
+    guard keyCode == 53 else {noisePressed();return false}
     escapePressed()
     return true // Consume mode-exit Escape before the receiving editor handles it.
   }

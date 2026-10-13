@@ -796,3 +796,128 @@ do {
   check(PadRegion.full.matchingPreset == "full" && PadRegion.iPhoneSized.matchingPreset == "iPhone" && r.matchingPreset == nil, "a custom area reports no preset")
 }
 print("Passed \(count) checks including settings pad.")
+
+// MARK: Exit hint (red first): repeated pointer or key noise while swiping is on shows how to exit.
+do {
+  var hint = ExitHint()
+  check(!hint.record(at: 0.0), "one stray click shows nothing")
+  var shown = false
+  for i in 1...7 { if hint.record(at: Double(i) * 0.2) { shown = true } }
+  check(shown, "repeated clicks without a swipe show the exit hint")
+  var cooled = ExitHint()
+  for i in 0..<20 { _ = cooled.record(at: Double(i) * 0.1) }
+  check(!cooled.record(at: 2.1), "the exit hint is not repeated within its cooldown")
+  var spaced = ExitHint()
+  var spacedShown = false
+  for i in 0..<20 { if spaced.record(at: Double(i) * 2.0) { spacedShown = true } }
+  check(!spacedShown, "slow, deliberate pauses do not count as noise")
+  var reset = ExitHint()
+  for i in 1...5 { _ = reset.record(at: Double(i) * 0.1) }
+  reset.swiped()
+  check(!reset.record(at: 0.7), "a real swipe clears the noise count")
+}
+print("Passed \(count) checks including exit hint.")
+
+// MARK: Fuzzing: random customer input against invariants. Seeded, so any failure reproduces.
+struct FuzzRandom {
+  var state: UInt64
+  mutating func next() -> UInt64 {
+    state &+= 0x9E3779B97F4A7C15
+    var z = state
+    z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+    z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+    return z ^ (z >> 31)
+  }
+  mutating func unit() -> Double { Double(next() % 1_000_001) / 1_000_000 }
+  mutating func int(_ range: ClosedRange<Int>) -> Int { range.lowerBound + Int(next() % UInt64(range.count)) }
+  mutating func point() -> Point { Point(unit(), unit()) }
+}
+do {
+  var rng = FuzzRandom(state: 42)
+  let fuzzLexicon = GestureLexicon(words: e2eWords, usePrior: false)
+  var rankViolations = 0
+  for _ in 0..<600 {
+    let n = rng.int(1...40)
+    var samples: [StrokeSample] = []
+    var time = 0.0
+    for _ in 0..<n {
+      time += rng.unit() * 0.05
+      samples.append(StrokeSample(rng.point(), time: time))
+    }
+    let ranked = fuzzLexicon.rank(samples, limit: 5)
+    if ranked.count > 5 || zip(ranked, ranked.dropFirst()).contains(where: { $0.score > $1.score }) { rankViolations += 1 }
+  }
+  check(rankViolations == 0, "fuzz: random strokes never crash, stay bounded and sorted (violations \(rankViolations))")
+
+  var nonFinite = 0
+  for _ in 0..<200 {
+    let bad = [Point(.nan, 0.5), Point(0.5, .infinity), Point(-.infinity, 0.2)]
+    let samples = (0..<6).map { StrokeSample($0 == 3 ? bad[rng.int(0...2)] : rng.point(), time: Double($0) * 0.01) }
+    if !fuzzLexicon.rank(samples, limit: 5).isEmpty { nonFinite += 1 }
+  }
+  check(nonFinite == 0, "fuzz: non-finite contacts are never recognized (\(nonFinite) recognized)")
+
+  var jumpBad = 0
+  for _ in 0..<400 {
+    var filter = ContactJumpFilter()
+    var time = 0.0, accepted = 0, offered = 0
+    for _ in 0..<rng.int(1...60) {
+      time += rng.unit() * 0.03
+      offered += 1
+      if filter.accept(rng.point(), time: time) { accepted += 1 }
+    }
+    if accepted > offered { jumpBad += 1 }
+  }
+  check(jumpBad == 0, "fuzz: the jump filter never accepts more samples than it is offered")
+
+  var areaBad = 0
+  for _ in 0..<800 {
+    var region = PadRegion.full
+    for _ in 0..<rng.int(1...12) {
+      let corner: PadRegion.Corner = [.topLeft, .topRight, .bottomLeft, .bottomRight][rng.int(0...3)]
+      region = region.dragging(corner, to: Point(rng.unit() * 2 - 0.5, rng.unit() * 2 - 0.5))
+    }
+    let inside = [region.minX, region.minY, region.maxX, region.maxY].allSatisfy { (0...1).contains($0) }
+    if !inside || region.spanX < PadRegion.minimumSpan - 1e-9 || region.spanY < PadRegion.minimumSpan - 1e-9 { areaBad += 1 }
+  }
+  check(areaBad == 0, "fuzz: pad areas always stay on the trackpad at a usable size (violations \(areaBad))")
+
+  var viewBad = 0
+  for _ in 0..<800 {
+    let v = KeyboardViewport(minX: rng.unit(), minY: rng.unit(), maxX: rng.unit(), maxY: rng.unit())
+    let p = rng.point()
+    if v.toPad(v.toKeyboard(p)).distance(p) > 1e-9 { viewBad += 1 }
+  }
+  check(viewBad == 0, "fuzz: crop mapping round-trips for any crop (violations \(viewBad))")
+
+  var choiceBad = 0
+  for _ in 0..<800 {
+    let count = rng.int(0...4)
+    let index = CandidateChoice.choiceIndex(for: rng.point(), count: count)
+    if let i = index, !(0..<max(count, 1)).contains(i) || count == 0 { choiceBad += 1 }
+  }
+  check(choiceBad == 0, "fuzz: a choice tap always picks a shown word or nothing")
+
+  var undoBad = 0
+  for _ in 0..<400 {
+    let typed = fuzzLexicon.rank(keyboardStroke(Keyboard.path(e2eWords[rng.int(0...(e2eWords.count - 1))])), limit: 5).map(\.word)
+    guard let first = typed.first else { continue }
+    if UndoPlan.alternatives(after: first, from: typed).contains(first) { undoBad += 1 }
+  }
+  check(undoBad == 0, "fuzz: undo never offers the word that was just undone")
+
+  var hintBad = 0
+  var hint = ExitHint()
+  var lastShown: Double?
+  var clock = 0.0
+  for _ in 0..<5000 {
+    clock += rng.unit() * 0.5
+    if rng.unit() < 0.05 { hint.swiped() }
+    if hint.record(at: clock) {
+      if let last = lastShown, clock - last < ExitHint.cooldown { hintBad += 1 }
+      lastShown = clock
+    }
+  }
+  check(hintBad == 0, "fuzz: the exit hint never repeats within its cooldown (violations \(hintBad))")
+}
+print("Passed \(count) checks including fuzzing.")
