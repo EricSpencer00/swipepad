@@ -694,7 +694,8 @@ final class GuidePanel: NSPanel {
     let subrole:String
     switch metadata.subrole {case .absent:subrole="absent";case .unreadable:subrole="unreadable";case .named(let name):subrole=["AXUnknown","AXSearchField","AXSecureTextField"].contains(name) ? name:"unrecognized"}
     captureDiagnostics.inputCapabilities="Role \(role) · subrole \(subrole) · selected-text write \(selected) · value write \(value) · selection write \(rangeWrite)"
-    guard supportedField(field) else {
+    // Admit from the same metadata snapshot the diagnostics just recorded, not a second read.
+    guard FieldPolicy.permits(role:metadata.role,subrole:metadata.subrole,insertionSettable:metadata.writable,secureInput:secureInputActive) else {
       captureDiagnostics.stage="activationRefused";recordTargetRefusal("unsupportedField")
       showFeedback("This field does not expose safe editable input · see Setup diagnostics");return false
     }
