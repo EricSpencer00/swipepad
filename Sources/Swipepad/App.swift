@@ -1267,3 +1267,35 @@ final class GuidePanel: NSPanel {
     port=nil;source=nil
   }
 }
+
+// Hidden end-to-end write check (`Swipepad --self-test-write WORD --delay SECONDS`).
+// Runs the same target admission and insertion as a swipe, without touch input. The
+// focused field receives the word; only match results are printed, never field text.
+@MainActor extension AppDelegate {
+  func selfTestWrite(_ word:String,delay:Double) -> [String:Any] {
+    func result(_ ok:Bool,_ step:String,_ detail:String) -> [String:Any] {["ok":ok,"word":word,"step":step,"detail":detail]}
+    guard AXIsProcessTrusted() else {return result(false,"accessibility","Accessibility not granted to this build")}
+    Thread.sleep(forTimeInterval:delay)
+    active=true;inputProtectionHealthy=true
+    defer {active=false;target=nil;originalSelection=nil;originalContentDigest=nil}
+    guard acquireTarget(),let field=target else {
+      return result(false,"acquireTarget",captureDiagnostics.lastTargetRefusal ?? "no supported focused field")
+    }
+    guard let before=attribute(field,kAXValueAttribute) as? String else {return result(false,"readBefore","field value not readable")}
+    guard insertWord(word,alternatives:[word]) else {
+      return result(false,"insertWord",captureDiagnostics.lastTargetRefusal ?? label.stringValue)
+    }
+    let expected=before+word+" "
+    var matched=false
+    let deadline=Date().addingTimeInterval(2)
+    repeat {
+      if let after=attribute(field,kAXValueAttribute) as? String, after==expected {matched=true;break}
+      Thread.sleep(forTimeInterval:0.05)
+    } while Date()<deadline
+    let route=captureDiagnostics.lastInsertionBackend ?? "none"
+    if matched {return result(true,"verified","field shows the word (route \(route))")}
+    // Web editors may not show accessibility writes, and key presses can't be read back.
+    if route == "keystroke" {return result(true,"unverified","keys sent; field could not confirm (route keystroke)")}
+    return result(false,"verify","field did not show the word (route \(route))")
+  }
+}
