@@ -765,3 +765,13 @@ do {
   check(UndoPlan.alternatives(after: "hello", from: ["hello"]).isEmpty, "undo with no runner-up offers nothing")
 }
 print("Passed \(count) checks including insertion route and undo.")
+
+// MARK: Customer: short common words must type on the full word list (they were held back before).
+do {
+  let shortLexicon = GestureLexicon(words: WordVocabulary.words)
+  for word in ["hi", "hello"] {
+    let top = shortLexicon.rank(keyboardStroke(Keyboard.path(word)), limit: 5).first?.word
+    check(top == word, "customer: \(word) types as the top word on the full word list (got \(top ?? "nothing"))")
+  }
+}
+print("Passed \(count) checks including short words.")

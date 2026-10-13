@@ -676,18 +676,10 @@ final class GuidePanel: NSPanel {
     } else if let letter=singleLetter {
       candidates=[letter]
     } else {
+      // Always type the best word. Close calls are not held for confirmation; the other
+      // candidates stay available through Delete, which undoes the word and offers them.
       let ranked=gestureLexicon.rank(mapped,limit:5)
-      switch CandidateChoice.decide(ranked) {
-      case .commit:
-        candidates=ranked.map(\.word)
-      case .choose(let words):
-        setChoices(words);captureDiagnostics.candidates=words.count
-        prepareNextStroke(preserveTrail:true)
-        label.stringValue="Not sure · tap the word you meant on the top strip"
-        return
-      case .none:
-        candidates=[]
-      }
+      candidates=ranked.map(\.word)
     }
     captureDiagnostics.candidates=candidates.count
     guard let top=candidates.first else {
