@@ -8,8 +8,8 @@ public enum InsertionRoute: Equatable, Sendable {
   /// Accessibility writes there are accepted but do not reliably show up, so they can't be confirmed.
   case keystroke
 
-  public static func choose(insideWebArea: Bool) -> InsertionRoute {
-    insideWebArea ? .keystroke : .accessibility
+  public static func choose() -> InsertionRoute {
+    .keystroke
   }
 }
 

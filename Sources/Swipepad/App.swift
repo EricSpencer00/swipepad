@@ -295,12 +295,13 @@ final class GuidePanel: NSPanel {
       subrole = .unreadable
     }
     var settable: DarwinBoolean = false
-    let writable =
+    let selectedWritable =
       measureAX({AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)})
       == .success && settable.boolValue
     var valueSettable:DarwinBoolean=false,rangeSettable:DarwinBoolean=false
     let valueWritable=measureAX({AXUIElementIsAttributeSettable(element,kAXValueAttribute as CFString,&valueSettable)}) == .success && valueSettable.boolValue
     let rangeWritable=measureAX({AXUIElementIsAttributeSettable(element,kAXSelectedTextRangeAttribute as CFString,&rangeSettable)}) == .success && rangeSettable.boolValue
+    let writable = selectedWritable || valueWritable || rangeWritable
     // Text input need not expose writable AXValue: normal typing uses the app input pipeline.
     // Still require a readable caret/value and explicit editability before event delivery.
     let editable = (attribute(element,"AXEditable") as? Bool) == true
@@ -888,18 +889,6 @@ final class GuidePanel: NSPanel {
     return result
   }
   /// True when the field sits inside a web area, such as Electron or browser editors.
-  func insideWebArea(_ element:AXUIElement)->Bool {
-    var current:AXUIElement?=element
-    for _ in 0..<20 {
-      guard let node=current else {return false}
-      if (attribute(node,kAXRoleAttribute) as? String)=="AXWebArea" {return true}
-      guard let parent=attribute(node,kAXParentAttribute),CFGetTypeID(parent)==AXUIElementGetTypeID() else {return false}
-      current=unsafeDowncast(parent,to:AXUIElement.self)
-    }
-    return false
-  }
-  /// Types the word and a space as real key presses to the focused app. Used for web editors, where
-  /// accessibility writes can't be confirmed. Only runs when the same app and field are still focused.
   func typeByKeystroke(_ word:String,alternatives:[String],field:AXUIElement)->Bool {
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == originalPID,identity(field,pid:originalPID),
       let events=Self.textEvents(word+" ") else {cancel("Focus changed · no word typed");return false}
@@ -926,7 +915,7 @@ final class GuidePanel: NSPanel {
   }
   func insertWord(_ word:String,alternatives:[String])->Bool {
     guard active,validTarget(),let target,let original=originalSelection else {cancel("Focus or caret changed · no word inserted");return false}
-    if InsertionRoute.choose(insideWebArea:insideWebArea(target)) == .keystroke {return typeByKeystroke(word,alternatives:alternatives,field:target)}
+    if InsertionRoute.choose() == .keystroke {return typeByKeystroke(word,alternatives:alternatives,field:target)}
     guard let before=attribute(target,kAXValueAttribute) as? String,
       originalContentDigest==Data(SHA256.hash(data:Data(before.utf8))) else {cancel("Content changed during swipe · no word inserted");return false}
     guard let plan=try? WordInsertion.plan(before,location:original.location,length:original.length,word:word).get() else {cancel("Use a word boundary or select a whole word · no word inserted");return false}
@@ -1280,7 +1269,7 @@ final class GuidePanel: NSPanel {
     }
     guard let before=attribute(field,kAXValueAttribute) as? String else {return result(false,"readBefore","field value not readable")}
     guard insertWord(word,alternatives:[word]) else {
-      return result(false,"insertWord",captureDiagnostics.lastTargetRefusal ?? label.stringValue)
+      return result(false,"insertWord","focus \(captureDiagnostics.focusRejection ?? "none") · refusal \(captureDiagnostics.lastTargetRefusal ?? "none") · stage \(captureDiagnostics.stage)")
     }
     let expected=before+word+" "
     var matched=false
