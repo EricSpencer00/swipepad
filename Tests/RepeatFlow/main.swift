@@ -830,6 +830,12 @@ providerDifference.cancel("OFF")
 let authoredHint=MemoryInput();authoredHint.value="Owned fixture hint";authoredHint.placeholderAttribute=authoredHint.value;authoredHint.caret=CFRange(location:18,length:0);authoredHint.activate();authoredHint.insertionTransport = .keyboard;word(authoredHint,"world")
 check(authoredHint.value=="Owned fixture hint world " && authoredHint.captureDiagnostics.writeBeforeMatchesPlaceholder==true && authoredHint.captureDiagnostics.insertions==1,"real authored text identical to a placeholder is retained and receives a normal exact append")
 authoredHint.cancel("OFF")
+// Value-only provider: the empty field's hint is AXValue and AXNumberOfCharacters is absent.
+// A whole-value rewrite would publish that hint as document text, so it must be refused first.
+let hintRewrite=MemoryInput();hintRewrite.value="Owned input placeholder";hintRewrite.placeholderAttribute=hintRewrite.value;hintRewrite.caret=CFRange(location:0,length:0);hintRewrite.selectedTextWritable=false;hintRewrite.activate();hintRewrite.insertionTransport = .accessibility
+word(hintRewrite,"cat")
+check(hintRewrite.value=="Owned input placeholder" && hintRewrite.attributeNamesSet.isEmpty && hintRewrite.unresolvedWrites.isEmpty,"ambiguous hint-valued whole-value rewrite is refused before any mutation")
+hintRewrite.cancel("OFF")
 let legacyEvidenceJSON=try! JSONSerialization.data(withJSONObject:["trial":0,"mode":"trackpad","stage":"off","callbacks":0,"contactFrames":0,"idleFrames":0,"states":[:],"gateWaitFrames":0,"samples":0,"candidates":0,"maximumCallbackDelayMilliseconds":0,"axRequests":0,"maximumAXMilliseconds":0,"totalAXMilliseconds":0,"resetReasons":[:],"cancelReasons":[:],"scrollEventsPassed":0,"inputProtectionFailures":0,"rejectionReasons":[:],"targetAttempts":0,"targetAdmissions":0,"releaseFrames":0,"graceRejoins":0,"graceCommits":0,"liftGraceSeconds":0,"droppedFrames":0,"recognizedWords":0,"rejectedWords":0,"pendingWords":0,"writeAttempts":0,"acceptedMutations":0,"confirmationWaitMilliseconds":0,"insertions":0])
 check((try? JSONDecoder().decode(CaptureDiagnostics.self,from:legacyEvidenceJSON))?.writeBeforeUTF16Length==nil,"optional readback evidence keeps older stored capture snapshots decodable")
 print("PASS structural mutation evidence; total \(checks)")
