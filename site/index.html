@@ -8,27 +8,24 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
 <style>
-:root{--black:oklch(0 0 0);--white:oklch(1 0 0);--dim:oklch(0.5 0 0);--hair:oklch(0.22 0 0);
-  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",monospace;--ease:cubic-bezier(0.16,1,0.3,1)}
+:root{--black:#000;--white:#fff;--dim:oklch(0.6 0 0);--hair:oklch(0.22 0 0);--mono:"IBM Plex Mono",ui-monospace,"SF Mono",monospace;--ease:cubic-bezier(0.16,1,0.3,1)}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
-body{background:var(--black);color:var(--white);font-family:var(--mono);overflow:hidden}
-.intro{position:fixed;inset:0;display:grid;place-items:center;padding:24px;transition:opacity .7s var(--ease)}
-.intro.gone{opacity:0;pointer-events:none}
-.laptop{width:min(92vw,640px);height:auto;display:block;transition:opacity .6s var(--ease),transform .6s var(--ease)}
-.laptop.gone{opacity:0;transform:scale(.98)}
-.laptop .ink{fill:none;stroke:#fff;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
-.laptop .pad-ink{fill:none;stroke:rgba(255,255,255,.45);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+body{background:var(--black);color:var(--white);font-family:var(--mono);overflow:hidden;touch-action:none}
+#scene{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:grab;transition:opacity 1.2s var(--ease)}
+#scene.dragging{cursor:grabbing}
+#scene.dim{opacity:.35}
 .title{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;transition:opacity .8s var(--ease)}
 .title.on{opacity:1}
 .title.away{opacity:0}
-.title h1{margin:0;font:500 clamp(44px,11vw,104px)/1 var(--mono);letter-spacing:-.01em;white-space:nowrap}
+.title h1{margin:0;font:500 clamp(44px,11vw,104px)/1 var(--mono);letter-spacing:-.01em;white-space:nowrap;background:rgba(0,0,0,.7);padding:0 .2em}
 .title h1 span{color:var(--dim)}
-.content{position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:24px;
+.content{position:fixed;inset:0;display:grid;place-items:center;text-align:center;padding:24px;pointer-events:none;
   opacity:0;transform:translateY(8px);transition:opacity .9s var(--ease),transform .9s var(--ease)}
-.content.on{opacity:1;transform:none}
-.cta{display:inline-block;padding:16px 34px;border:1px solid var(--white);color:var(--white);text-decoration:none;
+.content.on{opacity:1;transform:none;pointer-events:auto}
+.cta{display:inline-block;padding:16px 34px;border:1px solid var(--white);background:rgba(0,0,0,.6);color:var(--white);text-decoration:none;
   font:500 15px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;transition:background .2s,color .2s}
 .cta:hover{background:var(--white);color:var(--black)}
 .cta:focus-visible{outline:2px solid var(--white);outline-offset:4px}
@@ -39,125 +36,273 @@ body{background:var(--black);color:var(--white);font-family:var(--mono);overflow
 </style>
 </head>
 <body>
-<main class="intro" id="intro" aria-hidden="true">
-  <svg class="laptop" id="laptop" viewBox="0 0 1200 900" role="img" aria-label="A MacBook with the SwipeType keyboard on screen and a trackpad below">
-    <!-- lid -->
-    <rect x="220" y="40" width="760" height="500" rx="26" fill="#0a0a0a" stroke="#2a2a2a" stroke-width="3"/>
-    <rect x="248" y="72" width="704" height="436" rx="6" fill="#000" stroke="#161616" stroke-width="2"/>
-    <!-- on-screen keyboard: canvas 560 x 213, centred on the display -->
-    <g class="keys" id="keys"></g>
-    <path class="ink" id="screen-ink" d=""/>
-    <!-- base and trackpad -->
-    <rect x="150" y="540" width="900" height="330" rx="34" fill="#0c0c0c" stroke="#2a2a2a" stroke-width="3"/>
-    <rect x="420" y="600" width="360" height="248" rx="18" fill="#080808" stroke="#2c2c2c" stroke-width="2"/>
-    <path class="pad-ink" id="pad-ink" d=""/>
-  </svg>
-</main>
+<canvas id="scene" aria-label="A MacBook typing SwipeType.app from swipes"></canvas>
 
 <div class="title" id="title" aria-hidden="true"><h1>SwipeType<span>.app</span></h1></div>
 
 <section class="content" id="content">
   <a class="cta" href="https://github.com/EricSpencer00/swipepad/releases">Download</a>
-  <div class="source"><a href="https://github.com/EricSpencer00/swipepad">GitHub</a></div>
+  <div class="source"><a href="tutorial.html">Tutorial</a> &nbsp;·&nbsp; <a href="https://github.com/EricSpencer00/swipepad">GitHub</a></div>
 </section>
 
-<script>
-const NS="http://www.w3.org/2000/svg";
-// Keyboard geometry as in the app overlay: bottom-left origin, columns 0.1 apart, rows at 0.8 / 0.5 / 0.2.
-const rows=[["q","w","e","r","t","y","u","i","o","p"],["a","s","d","f","g","h","j","k","l"],["z","x","c","v","b","n","m"]];
-const offs=[0,0.5,1.5],ys=[0.8,0.5,0.2];
-const keyPos={};rows.forEach((r,ri)=>r.forEach((k,i)=>keyPos[k]=[(i+offs[ri]+0.5)/10,ys[ri]]));
-// On-screen canvas (app: 1 : 0.38) and trackpad (about 1.45 : 1), in SVG units.
-const CANVAS={x:320,y:270,w:560,h:213};
-const PAD={x:420,y:600,w:360,h:248};
-const toScreen=(p)=>[CANVAS.x+p[0]*CANVAS.w,CANVAS.y+(1-p[1])*CANVAS.h];
-const toPad=(p)=>[PAD.x+p[0]*PAD.w,PAD.y+(1-p[1])*PAD.h];
+<script type="module">
+import * as THREE from 'three';
 
-const keysG=document.getElementById('keys');
-const keyEls={};
-const keyW=CANVAS.w/10*0.86, keyH=CANVAS.h/3*0.68;
-rows.forEach((r,ri)=>r.forEach((k,i)=>{
-  const [x,y]=toScreen(keyPos[k]);
-  const g=document.createElementNS(NS,'g');
-  const rect=document.createElementNS(NS,'rect');
-  rect.setAttribute('x',x-keyW/2);rect.setAttribute('y',y-keyH/2);rect.setAttribute('width',keyW);rect.setAttribute('height',keyH);
-  rect.setAttribute('rx',9);rect.setAttribute('fill','#161616');rect.setAttribute('stroke','#3a3a3a');rect.setAttribute('stroke-width','1.5');
-  const text=document.createElementNS(NS,'text');
-  text.setAttribute('x',x);text.setAttribute('y',y+6);text.setAttribute('text-anchor','middle');
-  text.setAttribute('font-family','IBM Plex Mono, monospace');text.setAttribute('font-size','18');text.setAttribute('font-weight','500');
-  text.setAttribute('fill','#c8c8c8');text.textContent=k.toUpperCase();
-  g.appendChild(rect);g.appendChild(text);keysG.appendChild(g);
-  keyEls[k]={g,rect,text,x,y,at:700+(ri*10+i)*40};
-}));
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({canvas, antialias: true, alpha: false});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 1);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+camera.position.set(0, 2.9, 7.4);
+camera.lookAt(0, 0.7, 0);
 
-// The thumb's path: a slightly human circle, drawn on the trackpad and on the screen at once.
-const N=260, OVERSHOOT=1.07;
-const circle=[];
-for(let i=0;i<=N;i++){
-  const s=OVERSHOOT*i/N;                                  // progress around the circle
-  const th=-Math.PI/2+2*Math.PI*(s+0.02*Math.sin(2*Math.PI*s)); // uneven speed, like a real hand
-  const rx=0.40*(1+0.025*Math.sin(3*th)), ry=0.29*(1+0.03*Math.cos(2*th));
-  circle.push([0.5+rx*Math.cos(th),0.5+ry*Math.sin(th)]);
-}
-function pathFor(points,map){return 'M'+points.map(p=>map(p).map(v=>v.toFixed(1)).join(' ')).join(' L');}
-function lengthsOf(points,map){
-  const q=points.map(map),cum=[0];
-  for(let i=1;i<q.length;i++)cum.push(cum[i-1]+Math.hypot(q[i][0]-q[i-1][0],q[i][1]-q[i-1][1]));
-  return {cum,total:cum[cum.length-1]};
-}
-const screenInk=document.getElementById('screen-ink'), padInk=document.getElementById('pad-ink');
-const screenLen=lengthsOf(circle,toScreen), padLen=lengthsOf(circle,toPad);
-screenInk.setAttribute('d',pathFor(circle,toScreen));screenInk.setAttribute('stroke-dasharray',screenLen.total);
-padInk.setAttribute('d',pathFor(circle,toPad));padInk.setAttribute('stroke-dasharray',padLen.total);
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(3, 6, 5); scene.add(key);
+const rim = new THREE.DirectionalLight(0x9fb6c8, 0.6); rim.position.set(-4, 2, -3); scene.add(rim);
 
-// Timeline (ms): laptop in, keys pop in, circle drawn, keys out, laptop out, title, content.
-const T={laptopIn:0,keysIn:700,circleStart:1500,circleEnd:4300,keysOut:4600,laptopOut:5000,titleIn:5400,titleOut:7100,contentIn:7700};
-const laptop=document.getElementById('laptop'),intro=document.getElementById('intro');
-const title=document.getElementById('title'),content=document.getElementById('content');
-const ease=t=>t<0?0:t>1?1:0.5-0.5*Math.cos(Math.PI*t);
-// Progress around the circle, eased at both ends so the thumb settles, then runs.
-function progressAt(t){
-  if(t<=T.circleStart)return 0;
-  if(t>=T.circleEnd)return 1;
-  return ease((t-T.circleStart)/(T.circleEnd-T.circleStart));
-}
-function pointAt(len,p){
-  const target=len.total*p;let lo=0,hi=len.cum.length-1;
-  while(hi-lo>1){const m=(lo+hi)>>1;if(len.cum[m]<=target)lo=m;else hi=m;}
-  return {drawn:target,lo};
-}
-const t0=performance.now();
-function frame(now){
-  const t=now-t0;
-  laptop.classList.toggle('gone',t>=T.laptopOut);
-  intro.classList.toggle('gone',t>=T.laptopOut+500);
-  const p=progressAt(t);
-  const drawn=p*screenLen.total;
-  screenInk.setAttribute('stroke-dashoffset',screenLen.total-drawn);
-  padInk.setAttribute('stroke-dashoffset',padLen.total-p*padLen.total);
-  // keys pop in as they're needed, then fade with the rest
-  const out=t>=T.keysOut?Math.max(0,1-(t-T.keysOut)/400):1;
-  Object.values(keyEls).forEach(k=>{
-    const f=Math.max(0,Math.min(1,(t-k.at)/300)),e=1-Math.pow(1-f,3);
-    k.g.style.opacity=e*out;
-    k.g.style.transform=`translate(0,${(1-e)*10}px)`;
-  });
-  // light the key under the thumb's trail head
-  if(p>0&&p<1){
-    const idx=Math.min(circle.length-1,Math.floor(p*(circle.length-1)));
-    const head=toScreen(circle[idx]);
-    let best=null,bd=Infinity;
-    Object.entries(keyEls).forEach(([key,k])=>{const d=Math.hypot(k.x-head[0],k.y-head[1]);if(d<bd){bd=d;best=key;}});
-    Object.entries(keyEls).forEach(([key,k])=>{const lit=key===best&&bd<keyW*0.7;k.rect.setAttribute('fill',lit?'#fff':'#161616');k.text.setAttribute('fill',lit?'#000':'#c8c8c8');});
+// ---- textures: the lid's screen and the trackpad are drawn on canvases every frame
+const screenCv = document.createElement('canvas'); screenCv.width = 1600; screenCv.height = 1040;
+const screenCtx = screenCv.getContext('2d');
+const padCv = document.createElement('canvas'); padCv.width = 900; padCv.height = 600;
+const padCtx = padCv.getContext('2d');
+const screenTex = new THREE.CanvasTexture(screenCv);
+const padTex = new THREE.CanvasTexture(padCv);
+screenTex.colorSpace = THREE.SRGBColorSpace; padTex.colorSpace = THREE.SRGBColorSpace;
+
+// ---- MacBook: base with trackpad, hinged lid with the screen on its inner face
+const aluminium = new THREE.MeshStandardMaterial({color: 0x8d9296, metalness: 0.85, roughness: 0.35});
+const dark = new THREE.MeshStandardMaterial({color: 0x0d0e10, metalness: 0.4, roughness: 0.6});
+const base = new THREE.Mesh(new THREE.BoxGeometry(3.3, 0.12, 2.3), aluminium);
+base.position.set(0, 0.06, 0);
+scene.add(base);
+const pad = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 0.84), new THREE.MeshStandardMaterial({map: padTex, roughness: 0.5, metalness: 0.1}));
+pad.rotation.x = -Math.PI / 2; pad.position.set(0, 0.125, 0.52);
+scene.add(pad);
+
+const hinge = new THREE.Group();
+hinge.position.set(0, 0.12, -1.13);
+scene.add(hinge);
+const lidLength = 2.1;
+const lid = new THREE.Mesh(new THREE.BoxGeometry(3.3, 0.07, lidLength), aluminium);
+lid.position.set(0, 0, lidLength / 2);
+hinge.add(lid);
+const screen = new THREE.Mesh(new THREE.PlaneGeometry(3.1, 1.95), new THREE.MeshBasicMaterial({map: screenTex}));
+// the lid's thickness is the bezel; the screen sits just inside its face (no overlapping plane to z-fight)
+// face the inside of the lid (its -y side) toward the viewer when open
+screen.rotation.x = Math.PI / 2;
+screen.position.set(0, -0.037, lidLength / 2);
+hinge.add(screen);
+
+
+// ---- interaction: drag to turn the laptop, release to settle
+const pointer = {down: false, x: 0, turn: 0, tilt: 0, targetTurn: 0.35, targetTilt: 0.12};
+const laptop = new THREE.Group();
+[base, pad, hinge].forEach(o => { scene.remove(o); laptop.add(o); });
+scene.add(laptop);
+laptop.position.y = -0.2;
+canvas.addEventListener('pointerdown', e => {pointer.down = true; pointer.x = e.clientX; canvas.classList.add('dragging');});
+addEventListener('pointerup', () => {pointer.down = false; canvas.classList.remove('dragging');});
+addEventListener('pointermove', e => {
+  if (!pointer.down) return;
+  pointer.targetTurn = Math.max(-0.9, Math.min(0.9, pointer.targetTurn + (e.clientX - pointer.x) * 0.006));
+  pointer.x = e.clientX;
+});
+
+// ---- the typing timeline (ms). Words are swiped on the on-screen keyboard and mirrored on the trackpad.
+const rows = [["q","w","e","r","t","y","u","i","o","p"],["a","s","d","f","g","h","j","k","l"],["z","x","c","v","b","n","m"]];
+const offs = [0, 0.5, 1.5], ys = [0.8, 0.5, 0.2];
+const keyPos = {};
+rows.forEach((r, ri) => r.forEach((k, i) => keyPos[k] = [(i + offs[ri] + 0.5) / 10, ys[ri]]));
+
+function spline(pts) {
+  const N = 36, samples = [];
+  const at = i => pts[Math.max(0, Math.min(pts.length - 1, i))];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    for (let k = 0; k < N; k++) {
+      const t = k / N, u = 1 - t;
+      samples.push([u*u*u*p1[0] + 3*u*u*t*c1[0] + 3*u*t*t*c2[0] + t*t*t*p2[0], u*u*u*p1[1] + 3*u*u*t*c1[1] + 3*u*t*t*c2[1] + t*t*t*p2[1]]);
+    }
   }
-  if(t>=T.titleIn)title.classList.add('on');
-  if(t>=T.titleOut){title.classList.remove('on');title.classList.add('away');}
-  if(t>=T.contentIn)content.classList.add('on');
-  if(t<T.contentIn+1000)requestAnimationFrame(frame);
+  samples.push(pts[pts.length - 1]);
+  const arc = [0];
+  for (let i = 1; i < samples.length; i++) arc.push(arc[i-1] + Math.hypot(samples[i][0]-samples[i-1][0], samples[i][1]-samples[i-1][1]));
+  return {samples, arc};
 }
-if(matchMedia('(prefers-reduced-motion: reduce)').matches){
-  intro.classList.add('gone');content.classList.add('on');
-}else requestAnimationFrame(frame);
+// Speed follows curvature: slow in turns, quick across straights; landings are a little off-centre.
+function buildSwipe(word, start, duration, seed) {
+  const letters = word.split('');
+  const keys = letters.map((l, i) => { const p = keyPos[l];
+    return [p[0] + Math.sin((i+1)*12.9898+seed)*0.012, p[1] + Math.cos((i+1)*78.233+seed)*0.012]; });
+  const {samples, arc} = spline(keys);
+  const n = samples.length, L = arc[n-1];
+  const heading = i => { const a = samples[Math.max(0,i-2)], b = samples[Math.min(n-1,i+2)]; return Math.atan2(b[1]-a[1], b[0]-a[0]); };
+  const speed = [];
+  for (let i = 0; i < n; i++) {
+    const h0 = heading(Math.max(0,i-2)), h1 = heading(Math.min(n-1,i+2));
+    let dh = Math.abs(h1-h0); if (dh > Math.PI) dh = 2*Math.PI - dh;
+    const kappa = dh / Math.max(1, Math.min(i, n-1-i) + 1);
+    speed.push(1 / (0.35 + kappa*60));
+  }
+  const tAt = [0];
+  for (let i = 1; i < n; i++) { const ds = arc[i]-arc[i-1]; tAt.push(tAt[i-1] + ds / ((speed[i]+speed[i-1])/2)); }
+  const k = duration / tAt[n-1];
+  for (let i = 0; i < n; i++) tAt[i] *= k;
+  const landings = letters.map((_, i) => start + tAt[i === letters.length-1 ? n-1 : i*36]);
+  const sAtTime = t => {
+    if (t <= 0) return 0; if (t >= duration) return L;
+    let lo = 0, hi = n-1; while (hi-lo > 1) { const m = (lo+hi) >> 1; if (tAt[m] <= t) lo = m; else hi = m; }
+    const f = (t - tAt[lo]) / ((tAt[hi]-tAt[lo]) || 1); return arc[lo] + (arc[hi]-arc[lo]) * f;
+  };
+  return {word, letters, samples, arc, L, start, end: start + duration, landings, sAtTime};
+}
+const W = {
+  swipe: buildSwipe('swipe', 1900, 1000, 1.7),
+  type: buildSwipe('type', 3300, 760, 4.2),
+};
+const APP_TYPE_START = 4450, APP_STEP = 120;
+const KEYS_IN = 1150, KEYS_OUT = 5300, INTRO_END = 5900;
+const LID_START = 250, LID_DURATION = 1500;
+const TITLE_IN = 6500, TITLE_OUT = 8100, CONTENT_IN = 8700;
+const LOOP_DONE = CONTENT_IN + 1000;
+
+const typedAt = (word, t, startAt, perChar) => Math.max(0, Math.min(word.length, Math.floor((t - startAt) / perChar) + 1));
+function textAt(t) {
+  let s = '';
+  for (const w of [W.swipe, W.type]) {
+    if (t < w.start) return s;
+    if (t < w.end) return s + w.word.slice(0, w.landings.filter(x => x <= t).length).replace(/^./, c => c.toUpperCase()).replace(/^(.)/, '$1');
+    s += w.word;
+  }
+  if (t >= APP_TYPE_START) s += '.app'.slice(0, typedAt('.app', t, APP_TYPE_START, APP_STEP));
+  return s;
+}
+// capitalise like the product copy: "Swipe", "Type", ".app"
+function displayText(t) {
+  let s = '';
+  for (const w of [W.swipe, W.type]) {
+    if (t < w.start) break;
+    const n = t < w.end ? w.landings.filter(x => x <= t).length : w.word.length;
+    s += (w === W.swipe ? 'Swipe' : 'Type').slice(0, n);
+  }
+  if (t >= APP_TYPE_START) s += '.app'.slice(0, typedAt('.app', t, APP_TYPE_START, APP_STEP));
+  return s;
+}
+
+// ---- drawing
+function drawScreen(t) {
+  const c = screenCtx, w = screenCv.width, h = screenCv.height;
+  c.fillStyle = '#000'; c.fillRect(0, 0, w, h);
+  // text field
+  const fx = w*0.08, fy = h*0.1, fw = w*0.84, fh = h*0.16;
+  c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 3; c.strokeRect(fx, fy, fw, fh);
+  c.fillStyle = '#fff'; c.font = `500 ${Math.round(fh*0.5)}px "IBM Plex Mono", monospace`; c.textBaseline = 'middle'; c.textAlign = 'left';
+  const text = displayText(t);
+  c.fillText(text, fx + 36, fy + fh/2);
+  if (Math.floor(t / 500) % 2 === 0 && t > 300) {
+    const tw = c.measureText(text).width;
+    c.fillRect(fx + 36 + tw + 6, fy + fh*0.22, 4, fh*0.56);
+  }
+  // keyboard, as in the app overlay: canvas 1 : 0.38, keys 0.86 by 0.68 of the pitch
+  const kbW = w*0.84, kbH = kbW*0.38, kbX = w*0.08, kbY = h*0.94 - kbH;
+  const keyW = kbW/10*0.86, keyH = kbH/3*0.68;
+  const fade = Math.min(1, Math.max(0, (t - (KEYS_IN - 200)) / 400)) * (t > KEYS_OUT ? Math.max(0, 1 - (t - KEYS_OUT) / 500) : 1);
+  const lit = new Set();
+  for (const wd of [W.swipe, W.type]) wd.letters.forEach((l, i) => { if (t >= wd.landings[i] && t < wd.landings[i] + 320) lit.add(l); });
+  rows.forEach((r, ri) => r.forEach((k, i) => {
+    const idx = i + ri*0; const kp = keyPos[k];
+    const x = kbX + kp[0]*kbW, y = kbY + (1 - kp[1])*kbH;
+    const pop = Math.min(1, Math.max(0, (t - (KEYS_IN + (ri*10+i)*35)) / 260));
+    const a = pop * fade;
+    if (a <= 0) return;
+    c.globalAlpha = a;
+    c.fillStyle = lit.has(k) ? '#fff' : '#161616';
+    c.strokeStyle = '#3a3a3a'; c.lineWidth = 3;
+    roundRect(c, x - keyW/2, y - keyH/2, keyW, keyH, 14);
+    c.fill(); c.stroke();
+    c.fillStyle = lit.has(k) ? '#000' : '#c8c8c8';
+    c.font = `500 ${Math.round(keyH*0.36)}px "IBM Plex Mono", monospace`; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(k.toUpperCase(), x, y + 2);
+    c.globalAlpha = 1;
+  }));
+  // trails on the screen: the same swipes, drawn over the keys
+  for (const wd of [W.swipe, W.type]) drawTrail(c, wd, t, (p) => [kbX + p[0]*kbW, kbY + (1-p[1])*kbH], fade, w*0.0045);
+}
+function drawPad(t) {
+  const c = padCtx, w = padCv.width, h = padCv.height;
+  c.fillStyle = '#0b0c0e'; c.fillRect(0, 0, w, h);
+  c.strokeStyle = 'rgba(255,255,255,0.12)'; c.lineWidth = 2; c.strokeRect(6, 6, w-12, h-12);
+  for (const wd of [W.swipe, W.type]) drawTrail(c, wd, t, (p) => [p[0]*w, (1-p[1])*h], 0.45, 6);
+}
+function drawTrail(c, wd, t, map, alpha, width) {
+  if (t < wd.start) return;
+  const s = t >= wd.end ? wd.L : wd.sAtTime(t - wd.start);
+  const fadeOut = t > wd.end + 500 ? Math.max(0, 1 - (t - wd.end - 500) / 500) : 1;
+  c.save();
+  c.globalAlpha = alpha * fadeOut;
+  c.strokeStyle = '#fff'; c.lineWidth = width; c.lineCap = 'round'; c.lineJoin = 'round';
+  c.beginPath();
+  let first = true, acc = 0;
+  for (let i = 0; i < wd.samples.length; i++) {
+    if (i > 0) acc = wd.arc[i];
+    const p = map(wd.samples[i]);
+    if (wd.arc[i] > s) { const prev = wd.samples[Math.max(0,i-1)]; const f = (s - wd.arc[i-1]) / ((wd.arc[i]-wd.arc[i-1])||1); const q = map([prev[0] + (wd.samples[i][0]-prev[0])*f, prev[1] + (wd.samples[i][1]-prev[1])*f]); if (first) c.moveTo(q[0], q[1]); else c.lineTo(q[0], q[1]); break; }
+    if (first) { c.moveTo(p[0], p[1]); first = false; } else c.lineTo(p[0], p[1]);
+  }
+  c.stroke();
+  c.restore();
+}
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath(); c.moveTo(x+r, y); c.arcTo(x+w, y, x+w, y+h, r); c.arcTo(x+w, y+h, x, y+h, r); c.arcTo(x, y+h, x, y, r); c.arcTo(x, y, x+w, y, r); c.closePath();
+}
+
+// ---- main loop
+const easeOut = x => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+const easeInOut = x => 0.5 - 0.5*Math.cos(Math.PI*Math.min(1, Math.max(0, x)));
+const title = document.getElementById('title'), content = document.getElementById('content');
+let t0 = performance.now();
+let introDone = false;
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  // keep the laptop in frame on narrow screens
+  camera.position.z = w / h < 1 ? 10.5 : 7.4;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+function frame(now) {
+  const t = reduced ? 99999 : now - t0;
+  // lid opens with the animation, then stays open
+  const open = easeInOut((t - LID_START) / LID_DURATION);
+  hinge.rotation.x = -open * 1.95;
+  // pointer turn settles slowly
+  if (!pointer.down) pointer.turn += (pointer.targetTurn - pointer.turn) * 0.04;
+  laptop.rotation.y = pointer.turn;
+  laptop.rotation.x = -0.12 + pointer.tilt;
+  if (!reduced) drawScreen(t); else drawScreen(99999);
+  drawPad(reduced ? 99999 : t);
+  screenTex.needsUpdate = true; padTex.needsUpdate = true;
+  renderer.render(scene, camera);
+
+  if (t >= KEYS_OUT && !introDone) {
+    introDone = true;
+    canvas.classList.add('dim');
+  }
+  title.classList.toggle('on', t >= TITLE_IN && t < TITLE_OUT);
+  title.classList.toggle('away', t >= TITLE_OUT);
+  content.classList.toggle('on', t >= CONTENT_IN);
+  if (!reduced || true) requestAnimationFrame(frame);
+}
+if (reduced) {
+  content.classList.add('on'); canvas.classList.add('dim');
+  requestAnimationFrame(frame);
+} else requestAnimationFrame(frame);
 </script>
 </body>
 </html>

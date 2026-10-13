@@ -127,9 +127,10 @@ final class GuidePanel: NSPanel {
     }
     menu.addItem(withTitle:"On-Screen Guide Layout…",action:#selector(showOverlayLayout),keyEquivalent:"")
     let areaMenu=NSMenu()
-    for (title,stored) in [("Full Trackpad",false),("iPhone-Sized Area",true)] {
+    let current=PadRegion.preset(for:padRegion)
+    for (title,key) in [("Full Trackpad","full"),("iPhone-Sized Area","iPhone"),("Compact Area","compact")] {
       let item=areaMenu.addItem(withTitle:title,action:#selector(choosePadArea(_:)),keyEquivalent:"")
-      item.representedObject=stored;item.state=(padRegion == PadRegion.iPhoneSized) == stored ? .on : .off
+      item.representedObject=key;item.state=current == key ? .on : .off
     }
     let areaItem=menu.addItem(withTitle:"Pad Area",action:nil,keyEquivalent:"")
     areaItem.submenu=areaMenu
@@ -1079,9 +1080,9 @@ final class GuidePanel: NSPanel {
     updateModeIndicator()
   }
   @objc func choosePadArea(_ item:NSMenuItem) {
-    guard !active,let iPhone=item.representedObject as? Bool else {return}
-    UserDefaults.standard.set(iPhone ? PadRegion.iPhoneSized.stored : PadRegion.full.stored,forKey:"padRegion")
-    for candidate in item.menu?.items ?? [] {candidate.state=(candidate.representedObject as? Bool)==iPhone ? .on : .off}
+    guard !active,let key=item.representedObject as? String,let region=PadRegion.named(key) else {return}
+    UserDefaults.standard.set(region.stored,forKey:"padRegion")
+    for candidate in item.menu?.items ?? [] {candidate.state=(candidate.representedObject as? String)==key ? .on : .off}
   }
   @objc func showLastCorrection() {
     guard !active else {return}

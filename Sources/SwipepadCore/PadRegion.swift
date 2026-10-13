@@ -9,8 +9,22 @@ public struct PadRegion: Equatable, Sendable {
   /// About 71 mm by 36 mm on a trackpad of about 110 mm by 75 mm: an iPhone's width and keyboard height.
   /// Estimates from published sizes, not measured on a device.
   public static let iPhoneSized = PadRegion(minX: 0.175, minY: 0.26, maxX: 0.825, maxY: 0.74)
+  /// Half the trackpad's width and height, centred: for small swipes with the hand resting on the pad.
+  public static let compact = PadRegion(minX: 0.25, minY: 0.3, maxX: 0.75, maxY: 0.7)
   public static let minimumSpan = 0.3
 
+  /// Named presets used by the Pad Area menu.
+  public static func named(_ key: String) -> PadRegion? {
+    switch key {
+    case "full": return .full
+    case "iPhone": return .iPhoneSized
+    case "compact": return .compact
+    default: return nil
+    }
+  }
+  public static func preset(for region: PadRegion) -> String? {
+    ["full": PadRegion.full, "iPhone": .iPhoneSized, "compact": .compact].first { $0.value == region }?.key
+  }
   public let minX: Double, minY: Double, maxX: Double, maxY: Double
 
   public init(minX: Double, minY: Double, maxX: Double, maxY: Double) {

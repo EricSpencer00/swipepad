@@ -775,3 +775,12 @@ do {
   }
 }
 print("Passed \(count) checks including short words.")
+
+// MARK: Pad presets: compact area is smaller than the iPhone-sized area and stays on the pad.
+do {
+  let compact = PadRegion.compact
+  check(compact.spanX < PadRegion.iPhoneSized.spanX && compact.spanY < PadRegion.iPhoneSized.spanY, "compact area is smaller than the iPhone-sized area")
+  check(compact.minX >= 0 && compact.maxX <= 1 && compact.minY >= 0 && compact.maxY <= 1, "compact area stays on the trackpad")
+  check(compact.contains(Point(0.5, 0.5)) && !compact.contains(Point(0.02, 0.02)), "compact area is centred")
+}
+print("Passed \(count) checks including pad presets.")

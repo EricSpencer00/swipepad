@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How to use SwipeType</title>
+<meta name="description" content="How to swipe to type on your MacBook trackpad with SwipeType.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--black:oklch(0 0 0);--white:oklch(1 0 0);--dim:oklch(0.6 0 0);--hair:oklch(0.22 0 0);
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--black);color:var(--white);font:400 15px/1.6 var(--mono);padding:48px 20px 80px}
+main{max-width:640px;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--hair);padding-bottom:16px;margin-bottom:8px}
+h1{margin:0;font:500 22px/1 var(--mono);letter-spacing:-.01em}
+header a{color:var(--dim);text-decoration:none;font-size:13px}
+header a:hover{color:var(--white)}
+ol{list-style:none;counter-reset:step;margin:0;padding:0}
+li{counter-increment:step;display:grid;grid-template-columns:44px 1fr;gap:12px;padding:20px 0;border-bottom:1px solid var(--hair)}
+li::before{content:counter(step,decimal-leading-zero);color:var(--dim);font-size:13px;padding-top:2px}
+li strong{display:block;font-weight:500;margin-bottom:4px}
+li p{margin:0;color:var(--dim)}
+kbd{font:500 13px var(--mono);border:1px solid var(--white);border-radius:4px;padding:1px 6px}
+h2{font:500 13px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin:40px 0 4px}
+.tips{margin:0;padding-left:18px;color:var(--dim)}
+.tips li{display:list-item;padding:4px 0;border:0;counter-increment:none}
+.tips li::before{content:none}
+</style>
+</head>
+<body>
+<main>
+  <header><h1>SwipeType</h1><a href="index.html">Back</a></header>
+  <ol>
+    <li><div><strong>Install</strong><p>Download the app from the <a href="https://github.com/EricSpencer00/swipepad/releases" style="color:inherit">releases page</a>. Right-click it and choose Open the first time.</p></div></li>
+    <li><div><strong>Allow Accessibility</strong><p>System Settings, then Privacy &amp; Security, then Accessibility. Turn on SwipeType. Open SwipeType's setup window and click Recheck.</p></div></li>
+    <li><div><strong>Click into a text field</strong><p>Any app works. Web editors such as Claude's composer work too.</p></div></li>
+    <li><div><strong>Start swiping</strong><p>Double-tap <kbd>⌘</kbd>. The keyboard appears on screen.</p></div></li>
+    <li><div><strong>Swipe a word</strong><p>Put one finger on the trackpad near the first letter, slide across the letters, and lift. The word is typed followed by a space. You don't need to land exactly on the first letter.</p></div></li>
+    <li><div><strong>Fix a word</strong><p>Press <kbd>Delete</kbd> to remove the last word. SwipeType offers the next best guess, and you can swipe again or tap a guess.</p></div></li>
+    <li><div><strong>Stop</strong><p>Press <kbd>Esc</kbd> or double-tap <kbd>⌘</kbd> again.</p></div></li>
+  </ol>
+
+  <h2>Pad area</h2>
+  <p style="margin:0;color:var(--dim)">Menu bar, then Pad Area. <strong style="color:var(--white);font-weight:500">Full Trackpad</strong> uses the whole pad. <strong style="color:var(--white);font-weight:500">iPhone-Sized Area</strong> uses a centred area the size of an iPhone keyboard. <strong style="color:var(--white);font-weight:500">Compact Area</strong> is smaller still. Touches outside the area are ignored, so your palm can rest on the pad.</p>
+
+  <h2>Tips</h2>
+  <ul class="tips">
+    <li>Swipe with one finger. Two fingers cancel the swipe.</li>
+    <li>A brief pause mid-swipe keeps the same word going.</li>
+    <li>Short words like "hi" work. If a word comes out wrong, press Delete.</li>
+  </ul>
+</main>
+</body>
+</html>
